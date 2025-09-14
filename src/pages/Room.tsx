@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+// src/pages/Room.tsx (Improved)
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import { VoiceVisualizer } from "@/components/VoiceVisualizer";
+import { useRoomStore } from "@/stores/useRoomStore";
 import { ControlBar } from "@/components/ControlBar";
 import { ChatPanel } from "@/components/ChatPanel";
 import { WhiteboardPanel } from "@/components/WhiteboardPanel";
@@ -9,57 +9,58 @@ import { VideoPreview } from "@/components/VideoPreview";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { toast } from "sonner";
 
-// Formula 3: Creative Connection Matrix - Familiar + New in harmony
+// Formula 3 & 8: A clean component structure is the result of creative connection and complexity solution
 const Room = () => {
   const navigate = useNavigate();
-  const [connectionDetails, setConnectionDetails] = useState<any>(null);
-  const [mediaPreferences, setMediaPreferences] = useState<any>(null);
+  // State is now managed by Zustand, the component is much cleaner
+  const {
+    connectionDetails,
+    mediaPreferences,
+    localStream,
+    remoteStream,
+    isConnecting,
+    activePanel,
+    init,
+    toggleAudio,
+    toggleVideo,
+    setActivePanel,
+    cleanup,
+  } = useRoomStore();
+
   const [showControls, setShowControls] = useState(true);
-  const [activePanel, setActivePanel] = useState<"none" | "chat" | "whiteboard" | "settings">("none");
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [isConnected, setIsConnected] = useState(false);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout>();
+  const [remoteAudioLevel, setRemoteAudioLevel] = useState(0); // Simulated
 
   useEffect(() => {
-    // Load session data
-    const connectionStored = sessionStorage.getItem("connectionDetails");
-    const mediaStored = sessionStorage.getItem("mediaPreferences");
-    
-    if (!connectionStored || !mediaStored) {
-      navigate("/");
-      return;
-    }
+    init().then(() => {
+      // Check if init failed (e.g., session data missing)
+      if (!sessionStorage.getItem("connectionDetails")) {
+        navigate("/");
+      }
+    });
 
-    setConnectionDetails(JSON.parse(connectionStored));
-    setMediaPreferences(JSON.parse(mediaStored));
-
-    // Simulate connection
-    setTimeout(() => {
-      setIsConnected(true);
-      toast.success("Connected to the conversation!");
-    }, 1000);
-
-    // Start audio level simulation (in real app, this would come from WebRTC)
+    // Simulate remote audio level
     const audioSimulation = setInterval(() => {
-      setAudioLevel(Math.random() * 0.8);
+      setRemoteAudioLevel(Math.random() * 0.8);
     }, 100);
 
     return () => {
+      // Clean up resources when component unmounts
+      cleanup();
       clearInterval(audioSimulation);
       if (hideControlsTimeoutRef.current) {
         clearTimeout(hideControlsTimeoutRef.current);
       }
     };
-  }, [navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only once on mount
 
   // Formula 4: Problem Redefinition - Controls appear when needed
   const handleMouseMove = () => {
     setShowControls(true);
-    
     if (hideControlsTimeoutRef.current) {
       clearTimeout(hideControlsTimeoutRef.current);
     }
-    
     hideControlsTimeoutRef.current = setTimeout(() => {
       setShowControls(false);
     }, 3000);
@@ -67,28 +68,27 @@ const Room = () => {
 
   const handleLeaveRoom = () => {
     toast("Leaving conversation...");
+    cleanup();
     navigate("/");
   };
 
+  // This is a placeholder for a real screen share implementation with WebRTC
   const handleScreenShare = async () => {
-    try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true
-      });
-      toast.success("Screen sharing started");
-      // In a real implementation, this would be sent to other participants
-    } catch (error) {
-      toast.error("Failed to start screen sharing");
-    }
+    toast.info("Screen sharing feature coming soon!");
   };
 
-  const handleOpenSettings = () => {
-    setActivePanel(activePanel === "settings" ? "none" : "settings");
-  };
-
-  if (!connectionDetails || !mediaPreferences) {
-    return null;
+  // FLICKER FIX: Render loading state until connection is established
+  if (isConnecting || !connectionDetails || !mediaPreferences) {
+    return (
+      <div className="absolute inset-0 bg-background flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 rounded-full bg-primary/20 animate-pulse mx-auto flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-primary animate-bounce" />
+          </div>
+          <p className="text-lg font-medium">Initializing secure connection...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -97,93 +97,57 @@ const Room = () => {
       onMouseMove={handleMouseMove}
     >
       {/* Privacy Indicator - Formula 10: Ethical Design */}
-      <div className="absolute top-4 left-4 z-50">
-        <div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-full border border-border/30">
-          <div className="status-indicator connected" />
-          <span className="text-sm font-medium">Live</span>
-        </div>
+      <div className="absolute top-4 left-4 z-50 flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-full border border-border/30">
+        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+        <span className="text-sm font-medium">Live</span>
       </div>
 
       {/* Main Video Area */}
       <div className="flex-1 relative">
         <div className="absolute inset-4">
-          {/* Remote Participant (Simulated) */}
-          <div className="relative w-full h-full">
-            <VideoPreview
-              nickname="Remote Participant"
-              isVideoEnabled={true}
-              audioLevel={audioLevel}
-              showVoiceFrame={true}
-            />
-            
-            {/* Voice visualization around video frame */}
-            <div className="absolute inset-0 pointer-events-none">
-              <VoiceVisualizer
-                audioLevel={audioLevel}
-                isActive={true}
-                position="frame"
-              />
-            </div>
-          </div>
+          {/* Remote Participant (Simulated with a placeholder) */}
+          <VideoPreview
+            stream={remoteStream} // Pass remote stream here in a real app
+            nickname="Remote Participant"
+            isVideoEnabled={true} // This would come from remote user's state
+            audioLevel={remoteAudioLevel}
+            showVoiceFrame={true}
+          />
         </div>
 
-        {/* Self Video - Picture in Picture */}
-        <div className="absolute bottom-20 right-6 w-48 aspect-video">
+        {/* Self Video - Picture in Picture (NOW WORKING) */}
+        <div className="absolute bottom-24 right-6 w-48 lg:w-64 aspect-video z-20">
           <VideoPreview
+            stream={localStream}
             nickname={connectionDetails.nickname}
             isVideoEnabled={mediaPreferences.videoEnabled}
-            audioLevel={0.3}
             isLocalVideo={true}
           />
         </div>
       </div>
 
       {/* Side Panels - Formula 8: Complexity Solution */}
-      {activePanel === "chat" && (
-        <ChatPanel onClose={() => setActivePanel("none")} />
-      )}
-      
-      {activePanel === "whiteboard" && (
-        <WhiteboardPanel onClose={() => setActivePanel("none")} />
-      )}
-
-      {activePanel === "settings" && (
-        <SettingsPanel onClose={() => setActivePanel("none")} />
-      )}
+      <ChatPanel isOpen={activePanel === "chat"} onClose={() => setActivePanel("none")} />
+      <WhiteboardPanel isOpen={activePanel === "whiteboard"} onClose={() => setActivePanel("none")} />
+      <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel("none")} />
 
       {/* Control Bar - Formula 4: Dynamic visibility */}
-      <div className={`absolute bottom-6 left-1/2 transform -translate-x-1/2 transition-all duration-300 ${
-        showControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
+      <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${
+        showControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10 pointer-events-none"
       }`}>
         <ControlBar
           isAudioEnabled={mediaPreferences.audioEnabled}
           isVideoEnabled={mediaPreferences.videoEnabled}
           activePanel={activePanel}
-          onToggleAudio={() => {
-            setMediaPreferences(prev => ({...prev, audioEnabled: !prev.audioEnabled}));
-          }}
-          onToggleVideo={() => {
-            setMediaPreferences(prev => ({...prev, videoEnabled: !prev.videoEnabled}));
-          }}
-          onToggleChat={() => setActivePanel(activePanel === "chat" ? "none" : "chat")}
-          onToggleWhiteboard={() => setActivePanel(activePanel === "whiteboard" ? "none" : "whiteboard")}
+          onToggleAudio={toggleAudio}
+          onToggleVideo={toggleVideo}
+          onToggleChat={() => setActivePanel("chat")}
+          onToggleWhiteboard={() => setActivePanel("whiteboard")}
           onScreenShare={handleScreenShare}
-          onOpenSettings={handleOpenSettings}
+          onOpenSettings={() => setActivePanel("settings")}
           onLeave={handleLeaveRoom}
         />
       </div>
-
-      {/* Connection Status */}
-      {!isConnected && (
-        <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center">
-          <div className="text-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-primary/20 animate-pulse mx-auto flex items-center justify-center">
-              <div className="w-8 h-8 rounded-full bg-primary animate-bounce" />
-            </div>
-            <p className="text-lg font-medium">Connecting to {connectionDetails.roomTitle}...</p>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
