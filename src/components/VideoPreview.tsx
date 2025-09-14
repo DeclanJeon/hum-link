@@ -7,6 +7,7 @@ interface VideoPreviewProps {
   nickname: string;
   audioLevel?: number;
   showVoiceFrame?: boolean;
+  isLocalVideo?: boolean;
 }
 
 // Video preview with integrated voice visualization
@@ -15,15 +16,28 @@ export const VideoPreview = ({
   isVideoEnabled, 
   nickname, 
   audioLevel = 0,
-  showVoiceFrame = false 
+  showVoiceFrame = false,
+  isLocalVideo = false
 }: VideoPreviewProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+    if (videoRef.current) {
+      if (stream) {
+        videoRef.current.srcObject = stream;
+      } else if (isLocalVideo && isVideoEnabled) {
+        // Get user media for local video
+        navigator.mediaDevices.getUserMedia({ 
+          video: true, 
+          audio: false 
+        }).then(userStream => {
+          if (videoRef.current) {
+            videoRef.current.srcObject = userStream;
+          }
+        }).catch(console.error);
+      }
     }
-  }, [stream]);
+  }, [stream, isLocalVideo, isVideoEnabled]);
 
   return (
     <div className="relative w-full aspect-video bg-card rounded-xl overflow-hidden shadow-[var(--shadow-elegant)] border border-border/30">

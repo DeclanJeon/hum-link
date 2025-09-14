@@ -6,6 +6,7 @@ import { ControlBar } from "@/components/ControlBar";
 import { ChatPanel } from "@/components/ChatPanel";
 import { WhiteboardPanel } from "@/components/WhiteboardPanel";
 import { VideoPreview } from "@/components/VideoPreview";
+import { SettingsPanel } from "@/components/SettingsPanel";
 import { toast } from "sonner";
 
 // Formula 3: Creative Connection Matrix - Familiar + New in harmony
@@ -14,7 +15,7 @@ const Room = () => {
   const [connectionDetails, setConnectionDetails] = useState<any>(null);
   const [mediaPreferences, setMediaPreferences] = useState<any>(null);
   const [showControls, setShowControls] = useState(true);
-  const [activePanel, setActivePanel] = useState<"none" | "chat" | "whiteboard">("none");
+  const [activePanel, setActivePanel] = useState<"none" | "chat" | "whiteboard" | "settings">("none");
   const [audioLevel, setAudioLevel] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout>();
@@ -69,6 +70,23 @@ const Room = () => {
     navigate("/");
   };
 
+  const handleScreenShare = async () => {
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true
+      });
+      toast.success("Screen sharing started");
+      // In a real implementation, this would be sent to other participants
+    } catch (error) {
+      toast.error("Failed to start screen sharing");
+    }
+  };
+
+  const handleOpenSettings = () => {
+    setActivePanel(activePanel === "settings" ? "none" : "settings");
+  };
+
   if (!connectionDetails || !mediaPreferences) {
     return null;
   }
@@ -115,6 +133,7 @@ const Room = () => {
             nickname={connectionDetails.nickname}
             isVideoEnabled={mediaPreferences.videoEnabled}
             audioLevel={0.3}
+            isLocalVideo={true}
           />
         </div>
       </div>
@@ -128,6 +147,10 @@ const Room = () => {
         <WhiteboardPanel onClose={() => setActivePanel("none")} />
       )}
 
+      {activePanel === "settings" && (
+        <SettingsPanel onClose={() => setActivePanel("none")} />
+      )}
+
       {/* Control Bar - Formula 4: Dynamic visibility */}
       <div className={`absolute bottom-6 left-1/2 transform -translate-x-1/2 transition-all duration-300 ${
         showControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
@@ -138,14 +161,14 @@ const Room = () => {
           activePanel={activePanel}
           onToggleAudio={() => {
             setMediaPreferences(prev => ({...prev, audioEnabled: !prev.audioEnabled}));
-            toast(mediaPreferences.audioEnabled ? "Microphone muted" : "Microphone enabled");
           }}
           onToggleVideo={() => {
             setMediaPreferences(prev => ({...prev, videoEnabled: !prev.videoEnabled}));
-            toast(mediaPreferences.videoEnabled ? "Camera disabled" : "Camera enabled");
           }}
           onToggleChat={() => setActivePanel(activePanel === "chat" ? "none" : "chat")}
           onToggleWhiteboard={() => setActivePanel(activePanel === "whiteboard" ? "none" : "whiteboard")}
+          onScreenShare={handleScreenShare}
+          onOpenSettings={handleOpenSettings}
           onLeave={handleLeaveRoom}
         />
       </div>

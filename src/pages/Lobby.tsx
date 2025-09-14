@@ -97,17 +97,41 @@ const Lobby = () => {
         track.enabled = !isAudioEnabled;
       });
     }
-    toast(isAudioEnabled ? "Microphone muted" : "Microphone enabled");
   };
 
-  const toggleVideo = () => {
-    setIsVideoEnabled(!isVideoEnabled);
+  const toggleVideo = async () => {
+    const newVideoState = !isVideoEnabled;
+    setIsVideoEnabled(newVideoState);
+    
     if (streamRef.current) {
-      streamRef.current.getVideoTracks().forEach(track => {
-        track.enabled = !isVideoEnabled;
-      });
+      if (newVideoState) {
+        // Re-enable video - get new stream
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: true
+          });
+          
+          // Stop old tracks
+          streamRef.current.getTracks().forEach(track => track.stop());
+          
+          // Update stream reference
+          streamRef.current = newStream;
+          
+          // Reinitialize audio analysis
+          if (isAudioEnabled) {
+            initializeAudioAnalysis(newStream);
+          }
+        } catch (error) {
+          console.error("Error restarting video:", error);
+        }
+      } else {
+        // Disable video tracks
+        streamRef.current.getVideoTracks().forEach(track => {
+          track.enabled = false;
+        });
+      }
     }
-    toast(isVideoEnabled ? "Camera disabled" : "Camera enabled");
   };
 
   const handleJoinRoom = () => {
@@ -157,11 +181,13 @@ const Lobby = () => {
             {/* Voice Visualization - Real-time feedback */}
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Voice Check</h3>
-              <VoiceVisualizer 
-                audioLevel={audioLevel} 
-                isActive={isAudioEnabled}
-                size="large"
-              />
+              <div className="h-16 flex items-center justify-center">
+                <VoiceVisualizer 
+                  audioLevel={audioLevel} 
+                  isActive={isAudioEnabled}
+                  size="large"
+                />
+              </div>
               {isAudioEnabled && audioLevel > 0.1 && (
                 <p className="text-success text-sm mt-2">🎤 Your voice sounds clear!</p>
               )}

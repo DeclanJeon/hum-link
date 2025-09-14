@@ -9,7 +9,8 @@ import {
   MoreHorizontal,
   PhoneOff,
   Settings,
-  Share
+  Share,
+  ScreenShare
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -21,11 +22,13 @@ import {
 interface ControlBarProps {
   isAudioEnabled: boolean;
   isVideoEnabled: boolean;
-  activePanel: "none" | "chat" | "whiteboard";
+  activePanel: "none" | "chat" | "whiteboard" | "settings";
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onToggleChat: () => void;
   onToggleWhiteboard: () => void;
+  onScreenShare: () => void;
+  onOpenSettings: () => void;
   onLeave: () => void;
 }
 
@@ -38,6 +41,8 @@ export const ControlBar = ({
   onToggleVideo,
   onToggleChat,
   onToggleWhiteboard,
+  onScreenShare,
+  onOpenSettings,
   onLeave
 }: ControlBarProps) => {
   return (
@@ -82,6 +87,16 @@ export const ControlBar = ({
         <Palette className="w-5 h-5" />
       </Button>
 
+      {/* Screen Share */}
+      <Button
+        variant="secondary"
+        size="lg"
+        onClick={onScreenShare}
+        className="fab"
+      >
+        <ScreenShare className="w-5 h-5" />
+      </Button>
+
       {/* More Actions Menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -90,11 +105,7 @@ export const ControlBar = ({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="center" side="top" className="mb-2">
-          <DropdownMenuItem>
-            <Share className="w-4 h-4 mr-2" />
-            Share Screen
-          </DropdownMenuItem>
-          <DropdownMenuItem>
+          <DropdownMenuItem onClick={onOpenSettings}>
             <Settings className="w-4 h-4 mr-2" />
             Settings
           </DropdownMenuItem>
