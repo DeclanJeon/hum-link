@@ -14,11 +14,12 @@ interface Message {
 }
 
 interface ChatPanelProps {
+  isOpen: boolean;
   onClose: () => void;
 }
 
 // Formula 6: Insight Amplification - Chat as visual conversation part
-export const ChatPanel = ({ onClose }: ChatPanelProps) => {
+export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",

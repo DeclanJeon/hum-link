@@ -7,10 +7,11 @@ import { Label } from "@/components/ui/label";
 import { X, Mic, Video, Volume2, Settings } from "lucide-react";
 
 interface SettingsPanelProps {
+  isOpen: boolean;
   onClose: () => void;
 }
 
-export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
+export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedAudioDevice, setSelectedAudioDevice] = useState<string>("");
@@ -31,6 +32,8 @@ export const SettingsPanel = ({ onClose }: SettingsPanelProps) => {
 
     getDevices();
   }, []);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">

@@ -4,13 +4,14 @@ import { X, Pen, Square, Circle, Eraser, Download } from "lucide-react";
 import { toast } from "sonner";
 
 interface WhiteboardPanelProps {
+  isOpen: boolean;
   onClose: () => void;
 }
 
 type Tool = "pen" | "square" | "circle" | "eraser";
 
 // Formula 5: Innovative Solution - True collaboration hub
-export const WhiteboardPanel = ({ onClose }: WhiteboardPanelProps) => {
+export const WhiteboardPanel = ({ isOpen, onClose }: WhiteboardPanelProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentTool, setCurrentTool] = useState<Tool>("pen");
