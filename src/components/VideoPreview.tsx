@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
-import { VoiceVisualizer } from "./VoiceVisualizer";
+import { VoiceVisualizer } from "./VoiceVisualizer"; // Assuming this component exists and is correct
 
 interface VideoPreviewProps {
-  stream?: MediaStream;
+  stream: MediaStream | null; // EVOLUTION 1: Stream is now nullable, but it's the ONLY source for the video
   isVideoEnabled: boolean;
   nickname: string;
   audioLevel?: number;
@@ -10,83 +10,67 @@ interface VideoPreviewProps {
   isLocalVideo?: boolean;
 }
 
-// Video preview with integrated voice visualization
-export const VideoPreview = ({ 
-  stream, 
-  isVideoEnabled, 
-  nickname, 
+// Formula 7: Thinking Evolution - The component has evolved to be a pure, predictable presentation layer.
+export const VideoPreview = ({
+  stream,
+  isVideoEnabled,
+  nickname,
   audioLevel = 0,
   showVoiceFrame = false,
-  isLocalVideo = false
+  isLocalVideo = false,
 }: VideoPreviewProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
+    // EVOLUTION 2: SIMPLIFIED & ROBUST STREAM HANDLING
+    // The component's ONLY responsibility is to bind the stream from props to the video element.
+    // It NO LONGER fetches its own media. This prevents all resource leaks and state conflicts.
     if (videoRef.current) {
-      if (stream) {
-        videoRef.current.srcObject = stream;
-      } else if (isLocalVideo && isVideoEnabled) {
-        // Get user media for local video
-        navigator.mediaDevices.getUserMedia({ 
-          video: true, 
-          audio: false 
-        }).then(userStream => {
-          if (videoRef.current) {
-            videoRef.current.srcObject = userStream;
-          }
-        }).catch(console.error);
-      }
+      videoRef.current.srcObject = stream;
     }
-  }, [stream, isLocalVideo, isVideoEnabled]);
+  }, [stream]); // The effect now ONLY depends on the stream object itself.
 
   return (
-    <div className="relative w-full aspect-video bg-card rounded-xl overflow-hidden shadow-[var(--shadow-elegant)] border border-border/30">
+    <div className="relative w-full h-full bg-muted rounded-lg overflow-hidden flex items-center justify-center shadow-md border border-border/20">
+      {/* 
+        EVOLUTION 3: LOGICAL & PREDICTABLE RENDERING
+        The video element is rendered, but its visibility is controlled by CSS.
+        This prevents jarring layout shifts when the video turns on/off.
+        The video is shown ONLY IF the stream exists AND video is enabled.
+      */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={isLocalVideo} // EVOLUTION 4: Mute is now conditional, critical for preventing echo.
+        className={`w-full h-full object-cover transition-opacity duration-300 ${
+          stream && isVideoEnabled ? "opacity-100" : "opacity-0"
+        }`}
+      />
+
+      {/* Placeholder UI: Shown when video is not active */}
+      {(!stream || !isVideoEnabled) && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-secondary/50 to-muted">
+          <div className="w-20 h-20 lg:w-24 lg:h-24 bg-primary/10 rounded-full flex items-center justify-center">
+            <span className="text-3xl lg:text-4xl font-bold text-primary">
+              {nickname.charAt(0).toUpperCase()}
+            </span>
+          </div>
+        </div>
+      )}
+      
       {/* Voice Visualization Frame Overlay */}
       {showVoiceFrame && (
-        <VoiceVisualizer 
-          audioLevel={audioLevel} 
+        <VoiceVisualizer
+          audioLevel={audioLevel}
           isActive={true}
           position="frame"
         />
       )}
 
-      {/* Video Stream */}
-      {isVideoEnabled && stream ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          playsInline
-          className="w-full h-full object-cover"
-        />
-      ) : (
-        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-secondary to-muted">
-          <div className="text-center space-y-4">
-            <div className="w-24 h-24 rounded-full bg-primary/20 flex items-center justify-center mx-auto">
-              <span className="text-3xl font-bold text-primary">
-                {nickname.charAt(0).toUpperCase()}
-              </span>
-            </div>
-            <div>
-              <p className="text-lg font-medium text-foreground">{nickname}</p>
-              <p className="text-sm text-muted-foreground">
-                {isVideoEnabled ? "Starting camera..." : "Camera is off"}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Nickname Overlay */}
-      <div className="absolute bottom-4 left-4">
-        <div className="bg-background/80 backdrop-blur-sm px-3 py-1 rounded-full border border-border/30">
-          <span className="text-sm font-medium text-foreground">{nickname}</span>
-        </div>
-      </div>
-
-      {/* Connection Status */}
-      <div className="absolute top-4 right-4">
-        <div className="status-indicator connected" />
+      {/* Nickname Overlay at the bottom */}
+      <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-full text-xs text-white">
+        {nickname}
       </div>
     </div>
   );
