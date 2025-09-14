@@ -1,5 +1,4 @@
-// src/pages/Room.tsx (Improved)
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRoomStore } from "@/stores/useRoomStore";
 import { ControlBar } from "@/components/ControlBar";
@@ -12,7 +11,6 @@ import { toast } from "sonner";
 // Formula 3 & 8: A clean component structure is the result of creative connection and complexity solution
 const Room = () => {
   const navigate = useNavigate();
-  // State is now managed by Zustand, the component is much cleaner
   const {
     connectionDetails,
     mediaPreferences,
@@ -20,20 +18,23 @@ const Room = () => {
     remoteStream,
     isConnecting,
     activePanel,
+    showControls,
+    remoteAudioLevel,
     init,
     toggleAudio,
     toggleVideo,
     setActivePanel,
+    setShowControls,
+    setRemoteAudioLevel,
+    handleLeaveRoom,
+    handleScreenShare,
     cleanup,
   } = useRoomStore();
 
-  const [showControls, setShowControls] = useState(true);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout>();
-  const [remoteAudioLevel, setRemoteAudioLevel] = useState(0); // Simulated
 
   useEffect(() => {
     init().then(() => {
-      // Check if init failed (e.g., session data missing)
       if (!sessionStorage.getItem("connectionDetails")) {
         navigate("/");
       }
@@ -45,17 +46,14 @@ const Room = () => {
     }, 100);
 
     return () => {
-      // Clean up resources when component unmounts
       cleanup();
       clearInterval(audioSimulation);
       if (hideControlsTimeoutRef.current) {
         clearTimeout(hideControlsTimeoutRef.current);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only once on mount
+  }, []);
 
-  // Formula 4: Problem Redefinition - Controls appear when needed
   const handleMouseMove = () => {
     setShowControls(true);
     if (hideControlsTimeoutRef.current) {
@@ -66,16 +64,6 @@ const Room = () => {
     }, 3000);
   };
 
-  const handleLeaveRoom = () => {
-    toast("Leaving conversation...");
-    cleanup();
-    navigate("/");
-  };
-
-  // This is a placeholder for a real screen share implementation with WebRTC
-  const handleScreenShare = async () => {
-    toast.info("Screen sharing feature coming soon!");
-  };
 
   // FLICKER FIX: Render loading state until connection is established
   if (isConnecting || !connectionDetails || !mediaPreferences) {
@@ -143,9 +131,9 @@ const Room = () => {
           onToggleVideo={toggleVideo}
           onToggleChat={() => setActivePanel("chat")}
           onToggleWhiteboard={() => setActivePanel("whiteboard")}
-          onScreenShare={handleScreenShare}
+          onScreenShare={() => handleScreenShare(toast)}
           onOpenSettings={() => setActivePanel("settings")}
-          onLeave={handleLeaveRoom}
+          onLeave={() => handleLeaveRoom(navigate, toast)}
         />
       </div>
     </div>

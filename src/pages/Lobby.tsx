@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { VoiceVisualizer } from "@/components/VoiceVisualizer";
@@ -6,146 +6,36 @@ import { DeviceSelector } from "@/components/DeviceSelector";
 import { VideoPreview } from "@/components/VideoPreview";
 import { toast } from "sonner";
 import { Mic, MicOff, Video, VideoOff } from "lucide-react";
+import { useLobbyStore } from "@/stores/useLobbyStore";
 
 // Formula 2: Multi-Dimensional Analysis - Perfect preparation space
 const Lobby = () => {
   const navigate = useNavigate();
-  const [connectionDetails, setConnectionDetails] = useState<any>(null);
-  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
-  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [selectedAudioDevice, setSelectedAudioDevice] = useState<string>("");
-  const [selectedVideoDevice, setSelectedVideoDevice] = useState<string>("");
-  const audioContextRef = useRef<AudioContext>();
-  const analyserRef = useRef<AnalyserNode>();
-  const streamRef = useRef<MediaStream>();
+  const {
+    connectionDetails,
+    isAudioEnabled,
+    isVideoEnabled,
+    audioLevel,
+    selectedAudioDevice,
+    selectedVideoDevice,
+    stream,
+    initialize,
+    toggleAudio,
+    toggleVideo,
+    setSelectedAudioDevice,
+    setSelectedVideoDevice,
+    handleJoinRoom,
+    cleanup
+  } = useLobbyStore();
 
   useEffect(() => {
-    // Load connection details from landing
-    const stored = sessionStorage.getItem("connectionDetails");
-    if (!stored) {
-      navigate("/");
-      return;
-    }
-    setConnectionDetails(JSON.parse(stored));
-
-    // Initialize media devices
-    initializeMedia();
+    initialize(navigate, toast);
 
     return () => {
-      // Cleanup media streams
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
+      cleanup();
     };
-  }, [navigate]);
+  }, [navigate, initialize, cleanup]);
 
-  const initializeMedia = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: true
-      });
-      
-      streamRef.current = stream;
-      
-      // Initialize audio analysis for voice visualization
-      if (isAudioEnabled) {
-        initializeAudioAnalysis(stream);
-      }
-      
-      toast.success("Camera and microphone ready!");
-    } catch (error) {
-      toast.error("Please allow camera and microphone access");
-      console.error("Media access error:", error);
-    }
-  };
-
-  const initializeAudioAnalysis = (stream: MediaStream) => {
-    const audioContext = new AudioContext();
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(stream);
-    
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    
-    audioContextRef.current = audioContext;
-    analyserRef.current = analyser;
-    
-    // Start audio level monitoring
-    const updateAudioLevel = () => {
-      if (analyserRef.current) {
-        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-        analyserRef.current.getByteFrequencyData(dataArray);
-        
-        const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
-        setAudioLevel(average / 255); // Normalize to 0-1
-      }
-      requestAnimationFrame(updateAudioLevel);
-    };
-    
-    updateAudioLevel();
-  };
-
-  const toggleAudio = () => {
-    setIsAudioEnabled(!isAudioEnabled);
-    if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = !isAudioEnabled;
-      });
-    }
-  };
-
-  const toggleVideo = async () => {
-    const newVideoState = !isVideoEnabled;
-    setIsVideoEnabled(newVideoState);
-    
-    if (streamRef.current) {
-      if (newVideoState) {
-        // Re-enable video - get new stream
-        try {
-          const newStream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: true
-          });
-          
-          // Stop old tracks
-          streamRef.current.getTracks().forEach(track => track.stop());
-          
-          // Update stream reference
-          streamRef.current = newStream;
-          
-          // Reinitialize audio analysis
-          if (isAudioEnabled) {
-            initializeAudioAnalysis(newStream);
-          }
-        } catch (error) {
-          console.error("Error restarting video:", error);
-        }
-      } else {
-        // Disable video tracks
-        streamRef.current.getVideoTracks().forEach(track => {
-          track.enabled = false;
-        });
-      }
-    }
-  };
-
-  const handleJoinRoom = () => {
-    // Store media preferences for meeting room
-    sessionStorage.setItem("mediaPreferences", JSON.stringify({
-      audioEnabled: isAudioEnabled,
-      videoEnabled: isVideoEnabled,
-      audioDeviceId: selectedAudioDevice,
-      videoDeviceId: selectedVideoDevice
-    }));
-
-    toast.success("Joining the conversation...");
-    navigate("/room");
-  };
 
   if (!connectionDetails) {
     return null;
@@ -170,7 +60,7 @@ const Lobby = () => {
           {/* Camera Preview - Center Stage */}
           <div className="lg:col-span-2">
             <VideoPreview 
-              stream={streamRef.current} 
+              stream={stream} 
               isVideoEnabled={isVideoEnabled}
               nickname={connectionDetails.nickname}
             />
@@ -211,7 +101,7 @@ const Lobby = () => {
                 <Button
                   variant={isAudioEnabled ? "default" : "destructive"}
                   size="lg"
-                  onClick={toggleAudio}
+                  onClick={() => toggleAudio()}
                   className="flex-1"
                 >
                   {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
@@ -219,7 +109,7 @@ const Lobby = () => {
                 <Button
                   variant={isVideoEnabled ? "default" : "destructive"}
                   size="lg"
-                  onClick={toggleVideo}
+                  onClick={() => toggleVideo(toast)}
                   className="flex-1"
                 >
                   {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
@@ -232,7 +122,7 @@ const Lobby = () => {
         {/* Join Button */}
         <div className="text-center mt-8">
           <Button
-            onClick={handleJoinRoom}
+            onClick={() => handleJoinRoom(navigate, toast)}
             className="btn-connection px-12 py-4 text-lg"
           >
             Join Conversation

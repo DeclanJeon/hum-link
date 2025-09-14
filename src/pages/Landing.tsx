@@ -1,47 +1,24 @@
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { useLandingStore } from "@/stores/useLandingStore";
 
 // Formula 1: Genius Insight - Maximum simplicity for connection focus
 const Landing = () => {
   const navigate = useNavigate();
-  const [roomTitle, setRoomTitle] = useState("");
-  const [nickname, setNickname] = useState("");
-
-  const generateRandomNickname = () => {
-    const adjectives = ["Brilliant", "Curious", "Radiant", "Wandering", "Inspiring", "Creative", "Thoughtful", "Dynamic"];
-    const nouns = ["Explorer", "Innovator", "Dreamer", "Architect", "Visionary", "Creator", "Pioneer", "Builder"];
-    
-    const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
-    const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
-    
-    return `${randomAdjective} ${randomNoun}`;
-  };
-
-  const handleConnect = () => {
-    if (!roomTitle.trim()) {
-      toast.error("Please enter a room title to continue");
-      return;
-    }
-
-    const finalNickname = nickname.trim() || generateRandomNickname();
-    
-    // Store connection details for the lobby
-    sessionStorage.setItem("connectionDetails", JSON.stringify({
-      roomTitle: roomTitle.trim(),
-      nickname: finalNickname
-    }));
-
-    toast.success(`Connecting as "${finalNickname}"...`);
-    navigate("/lobby");
-  };
+  const { 
+    roomTitle, 
+    nickname, 
+    setRoomTitle, 
+    setNickname, 
+    generateRandomNickname, 
+    handleConnect 
+  } = useLandingStore();
 
   const handleNicknameGenerate = () => {
     const randomName = generateRandomNickname();
-    setNickname(randomName);
     toast("✨ Perfect! This name suits you", { duration: 2000 });
   };
 
@@ -75,7 +52,7 @@ const Landing = () => {
               value={roomTitle}
               onChange={(e) => setRoomTitle(e.target.value)}
               className="h-12 text-lg bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20"
-              onKeyDown={(e) => e.key === "Enter" && handleConnect()}
+              onKeyDown={(e) => e.key === "Enter" && handleConnect(navigate, toast)}
             />
           </div>
 
@@ -101,13 +78,13 @@ const Landing = () => {
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
               className="h-12 text-lg bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20"
-              onKeyDown={(e) => e.key === "Enter" && handleConnect()}
+              onKeyDown={(e) => e.key === "Enter" && handleConnect(navigate, toast)}
             />
           </div>
 
           {/* Connection Button - The Only Action */}
           <Button
-            onClick={handleConnect}
+            onClick={() => handleConnect(navigate, toast)}
             className="w-full h-14 text-lg btn-connection mt-8"
             disabled={!roomTitle.trim()}
           >

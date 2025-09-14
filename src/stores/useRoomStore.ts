@@ -8,6 +8,8 @@ interface ConnectionDetails {
 interface MediaPreferences {
   audioEnabled: boolean;
   videoEnabled: boolean;
+  audioDeviceId?: string;
+  videoDeviceId?: string;
 }
 
 type ActivePanel = "chat" | "whiteboard" | "settings" | "none";
@@ -19,6 +21,8 @@ interface RoomState {
   remoteStream: MediaStream | null;
   isConnecting: boolean;
   activePanel: ActivePanel;
+  showControls: boolean;
+  remoteAudioLevel: number;
 }
 
 interface RoomActions {
@@ -26,6 +30,10 @@ interface RoomActions {
   toggleAudio: () => void;
   toggleVideo: () => void;
   setActivePanel: (panel: ActivePanel) => void;
+  setShowControls: (show: boolean) => void;
+  setRemoteAudioLevel: (level: number) => void;
+  handleLeaveRoom: (navigate: (path: string) => void, toast: any) => void;
+  handleScreenShare: (toast: any) => Promise<void>;
   cleanup: () => void;
 }
 
@@ -36,12 +44,13 @@ export const useRoomStore = create<RoomState & RoomActions>((set, get) => ({
   remoteStream: null,
   isConnecting: false,
   activePanel: "none",
+  showControls: true,
+  remoteAudioLevel: 0,
 
   init: async () => {
     set({ isConnecting: true });
     
     try {
-      // Get connection details from session storage
       const connectionData = sessionStorage.getItem("connectionDetails");
       const mediaData = sessionStorage.getItem("mediaPreferences");
       
@@ -55,7 +64,6 @@ export const useRoomStore = create<RoomState & RoomActions>((set, get) => ({
           isConnecting: false 
         });
 
-        // Get user media if video is enabled
         if (mediaPreferences.videoEnabled || mediaPreferences.audioEnabled) {
           try {
             const stream = await navigator.mediaDevices.getUserMedia({
@@ -86,7 +94,6 @@ export const useRoomStore = create<RoomState & RoomActions>((set, get) => ({
       set({ mediaPreferences: newPreferences });
       sessionStorage.setItem("mediaPreferences", JSON.stringify(newPreferences));
       
-      // Toggle audio track if stream exists
       if (localStream) {
         const audioTracks = localStream.getAudioTracks();
         audioTracks.forEach(track => {
@@ -106,7 +113,6 @@ export const useRoomStore = create<RoomState & RoomActions>((set, get) => ({
       set({ mediaPreferences: newPreferences });
       sessionStorage.setItem("mediaPreferences", JSON.stringify(newPreferences));
       
-      // Toggle video track if stream exists
       if (localStream) {
         const videoTracks = localStream.getVideoTracks();
         videoTracks.forEach(track => {
@@ -121,26 +127,39 @@ export const useRoomStore = create<RoomState & RoomActions>((set, get) => ({
     set({ activePanel: currentPanel === panel ? "none" : panel });
   },
 
+  setShowControls: (show: boolean) => set({ showControls: show }),
+
+  setRemoteAudioLevel: (level: number) => set({ remoteAudioLevel: level }),
+
+  handleLeaveRoom: (navigate: (path: string) => void, toast: any) => {
+    toast("Leaving conversation...");
+    get().cleanup();
+    navigate("/");
+  },
+
+  handleScreenShare: async (toast: any) => {
+    toast.info("Screen sharing feature coming soon!");
+  },
+
   cleanup: () => {
     const { localStream } = get();
     
-    // Stop all tracks
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop());
     }
     
-    // Clear session storage
     sessionStorage.removeItem("connectionDetails");
     sessionStorage.removeItem("mediaPreferences");
     
-    // Reset state
     set({
       connectionDetails: null,
       mediaPreferences: null,
       localStream: null,
       remoteStream: null,
       isConnecting: false,
-      activePanel: "none"
+      activePanel: "none",
+      showControls: true,
+      remoteAudioLevel: 0
     });
   }
 }));

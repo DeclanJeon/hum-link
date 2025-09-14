@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { X, Mic, Video, Volume2, Settings } from "lucide-react";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -12,26 +13,25 @@ interface SettingsPanelProps {
 }
 
 export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedAudioDevice, setSelectedAudioDevice] = useState<string>("");
-  const [selectedVideoDevice, setSelectedVideoDevice] = useState<string>("");
-  const [micVolume, setMicVolume] = useState([70]);
-  const [speakerVolume, setSpeakerVolume] = useState([80]);
+  const {
+    audioDevices,
+    videoDevices,
+    selectedAudioDevice,
+    selectedVideoDevice,
+    micVolume,
+    speakerVolume,
+    setSelectedAudioDevice,
+    setSelectedVideoDevice,
+    setMicVolume,
+    setSpeakerVolume,
+    initializeDevices
+  } = useSettingsStore();
 
   useEffect(() => {
-    const getDevices = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        setAudioDevices(devices.filter(device => device.kind === 'audioinput'));
-        setVideoDevices(devices.filter(device => device.kind === 'videoinput'));
-      } catch (error) {
-        console.error('Error getting devices:', error);
-      }
-    };
-
-    getDevices();
-  }, []);
+    if (isOpen) {
+      initializeDevices();
+    }
+  }, [isOpen, initializeDevices]);
 
   if (!isOpen) return null;
 

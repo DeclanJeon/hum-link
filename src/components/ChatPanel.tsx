@@ -1,17 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { X, Send, Pin } from "lucide-react";
 import { toast } from "sonner";
-
-interface Message {
-  id: string;
-  text: string;
-  sender: string;
-  timestamp: Date;
-  isOwn: boolean;
-}
+import { useChatStore } from "@/stores/useChatStore";
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -20,66 +13,20 @@ interface ChatPanelProps {
 
 // Formula 6: Insight Amplification - Chat as visual conversation part
 export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      text: "Hey! Great to connect with you here.",
-      sender: "Remote Participant",
-      timestamp: new Date(Date.now() - 300000),
-      isOwn: false
-    },
-    {
-      id: "2", 
-      text: "Absolutely! This interface feels really smooth.",
-      sender: "You",
-      timestamp: new Date(Date.now() - 240000),
-      isOwn: true
-    }
-  ]);
-  const [newMessage, setNewMessage] = useState("");
+  const { 
+    messages, 
+    newMessage, 
+    setNewMessage, 
+    sendMessage, 
+    addToWhiteboard 
+  } = useChatStore();
+  
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Auto-scroll to bottom when new messages arrive
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  const sendMessage = () => {
-    if (!newMessage.trim()) return;
-
-    const message: Message = {
-      id: Date.now().toString(),
-      text: newMessage.trim(),
-      sender: "You",
-      timestamp: new Date(),
-      isOwn: true
-    };
-
-    setMessages(prev => [...prev, message]);
-    setNewMessage("");
-
-    // Simulate response after a delay
-    setTimeout(() => {
-      const responses = [
-        "That's a great point!",
-        "I totally agree with that.",
-        "Let me think about that for a moment.",
-        "Interesting perspective!",
-        "Could you elaborate on that?"
-      ];
-      
-      const response: Message = {
-        id: (Date.now() + 1).toString(),
-        text: responses[Math.floor(Math.random() * responses.length)],
-        sender: "Remote Participant",
-        timestamp: new Date(),
-        isOwn: false
-      };
-      
-      setMessages(prev => [...prev, response]);
-    }, 1000 + Math.random() * 2000);
-  };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -88,10 +35,7 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
     }
   };
 
-  const addToWhiteboard = (message: Message) => {
-    toast.success("Message added to whiteboard!");
-    // In real implementation, this would integrate with whiteboard state
-  };
+  if (!isOpen) return null;
 
   return (
     <div className="fixed right-0 top-0 h-full w-80 bg-card/95 backdrop-blur-xl border-l border-border/50 shadow-[var(--shadow-elegant)] z-40">
@@ -119,7 +63,7 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => addToWhiteboard(message)}
+                    onClick={() => addToWhiteboard(message, toast)}
                     className="absolute -top-2 -right-2 w-6 h-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
                     title="Add to whiteboard"
                   >
