@@ -7,6 +7,7 @@ import { VideoPreview } from "@/components/VideoPreview";
 import { toast } from "sonner";
 import { Mic, MicOff, Video, VideoOff } from "lucide-react";
 import { useLobbyStore } from "@/stores/useLobbyStore";
+import { nanoid } from 'nanoid'; // 유니크한 사용자 ID 생성을 위해 추가
 
 // Formula 2: Multi-Dimensional Analysis - Perfect preparation space
 const Lobby = () => {
@@ -24,15 +25,54 @@ const Lobby = () => {
     toggleVideo,
     setSelectedAudioDevice,
     setSelectedVideoDevice,
-    handleJoinRoom,
     cleanup
   } = useLobbyStore();
+
+  // 컴포넌트 내부 최상단 근처
+  const joiningRef = useRef(false);
+
+  // handleJoinRoom 함수 수정
+  const handleJoinRoom = () => {
+    const { stream, isAudioEnabled, isVideoEnabled, selectedAudioDevice, selectedVideoDevice, connectionDetails } = useLobbyStore.getState();
+
+    if (!stream || !connectionDetails) {
+        toast.error("Media stream or connection details are not available.");
+        return;
+    }
+    
+    // 유니크한 userId 생성
+    const userId = nanoid();
+
+    // 1) stream을 라우팅 state에서 제거
+    // 2) 방 이동 전 joiningRef 설정
+    joiningRef.current = true;
+    navigate("/room", {
+        state: {
+            connectionDetails: {
+                ...connectionDetails,
+                userId: userId, // 생성된 userId 추가
+            },
+            mediaPreferences: {
+                audioEnabled: isAudioEnabled,
+                videoEnabled: isVideoEnabled,
+                audioDeviceId: selectedAudioDevice,
+                videoDeviceId: selectedVideoDevice,
+            }
+        }
+    });
+
+    // Lobby의 cleanup 함수는 호출하지 않음 (스트림을 넘겨줘야 하므로)
+    toast.success("Joining the conversation...");
+  };
 
   useEffect(() => {
     initialize(navigate, toast);
 
     return () => {
-      cleanup();
+      // 방으로 실제로 들어갈 때는 Lobby 스트림 정리하지 않음
+      if (!joiningRef.current) {
+        cleanup();
+      }
     };
   }, [navigate, initialize, cleanup]);
 
@@ -59,8 +99,8 @@ const Lobby = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Camera Preview - Center Stage */}
           <div className="lg:col-span-2">
-            <VideoPreview 
-              stream={stream} 
+            <VideoPreview
+              stream={stream}
               isVideoEnabled={isVideoEnabled}
               nickname={connectionDetails.nickname}
             />
@@ -72,8 +112,8 @@ const Lobby = () => {
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Voice Check</h3>
               <div className="h-16 flex items-center justify-center">
-                <VoiceVisualizer 
-                  audioLevel={audioLevel} 
+                <VoiceVisualizer
+                  audioLevel={audioLevel}
                   isActive={isAudioEnabled}
                   size="large"
                 />
@@ -122,7 +162,7 @@ const Lobby = () => {
         {/* Join Button */}
         <div className="text-center mt-8">
           <Button
-            onClick={() => handleJoinRoom(navigate, toast)}
+            onClick={handleJoinRoom} // 수정된 핸들러 연결
             className="btn-connection px-12 py-4 text-lg"
           >
             Join Conversation

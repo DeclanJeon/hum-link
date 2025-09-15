@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
-import { useRoomStore } from "@/stores/useRoomStore";
+import { useNavigate, useLocation } from "react-router-dom";
+import { useWebRTCStore, PeerState } from "@/stores/useWebRTCStore";
+import { useLobbyStore } from "@/stores/useLobbyStore";
 import { ControlBar } from "@/components/ControlBar";
 import { ChatPanel } from "@/components/ChatPanel";
 import { WhiteboardPanel } from "@/components/WhiteboardPanel";
@@ -8,51 +9,53 @@ import { VideoPreview } from "@/components/VideoPreview";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { toast } from "sonner";
 
-// Formula 3 & 8: A clean component structure is the result of creative connection and complexity solution
 const Room = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  
+  // Zustand 스토어에서 상태와 액션을 가져옵니다.
   const {
-    connectionDetails,
-    mediaPreferences,
     localStream,
-    remoteStream,
-    isConnecting,
+    peers,
+    isAudioEnabled,
+    isVideoEnabled,
     activePanel,
     showControls,
-    remoteAudioLevel,
     init,
+    cleanup,
     toggleAudio,
     toggleVideo,
+    toggleScreenShare,
     setActivePanel,
     setShowControls,
-    setRemoteAudioLevel,
-    handleLeaveRoom,
-    handleScreenShare,
-    cleanup,
-  } = useRoomStore();
+  } = useWebRTCStore();
+
+  const nickname = useWebRTCStore(state => state.nickname);
+
+  // 로비에서 전달받은 미디어 스트림을 사용합니다.
+  const lobbyStream = useLobbyStore((s) => s.stream);
+  const initialStream = lobbyStream ?? null;
+  const connectionDetails = location.state?.connectionDetails;
 
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
-    init().then(() => {
-      if (!sessionStorage.getItem("connectionDetails")) {
-        navigate("/");
-      }
-    });
+    if (!initialStream || !connectionDetails) {
+      toast.error("Invalid access. Redirecting to home.");
+      navigate("/");
+      return;
+    }
 
-    // Simulate remote audio level
-    const audioSimulation = setInterval(() => {
-      setRemoteAudioLevel(Math.random() * 0.8);
-    }, 100);
+    // WebRTC 및 시그널링 초기화
+    init(connectionDetails.roomTitle, connectionDetails.userId, connectionDetails.nickname, initialStream);
 
     return () => {
       cleanup();
-      clearInterval(audioSimulation);
       if (hideControlsTimeoutRef.current) {
         clearTimeout(hideControlsTimeoutRef.current);
       }
     };
-  }, []);
+  }, [init, cleanup, navigate, initialStream, connectionDetails]);
 
   const handleMouseMove = () => {
     setShowControls(true);
@@ -64,76 +67,81 @@ const Room = () => {
     }, 3000);
   };
 
+  const remotePeers = Array.from(peers.values());
 
-  // FLICKER FIX: Render loading state until connection is established
-  if (isConnecting || !connectionDetails || !mediaPreferences) {
-    return (
-      <div className="absolute inset-0 bg-background flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="w-16 h-16 rounded-full bg-primary/20 animate-pulse mx-auto flex items-center justify-center">
-            <div className="w-8 h-8 rounded-full bg-primary animate-bounce" />
-          </div>
-          <p className="text-lg font-medium">Initializing secure connection...</p>
-        </div>
-      </div>
-    );
+  if (!connectionDetails) {
+    return <div className="min-h-screen bg-background flex items-center justify-center"><p>Loading...</p></div>;
   }
 
   return (
-    <div 
-      className="h-screen bg-background flex flex-col relative overflow-hidden"
-      onMouseMove={handleMouseMove}
-    >
-      {/* Privacy Indicator - Formula 10: Ethical Design */}
+    <div className="h-screen bg-background flex flex-col relative overflow-hidden" onMouseMove={handleMouseMove}>
       <div className="absolute top-4 left-4 z-50 flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-full border border-border/30">
         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        <span className="text-sm font-medium">Live</span>
+        <span className="text-sm font-medium">Live & Encrypted</span>
       </div>
 
-      {/* Main Video Area */}
       <div className="flex-1 relative">
-        <div className="absolute inset-4">
-          {/* Remote Participant (Simulated with a placeholder) */}
-          <VideoPreview
-            stream={remoteStream} // Pass remote stream here in a real app
-            nickname="Remote Participant"
-            isVideoEnabled={true} // This would come from remote user's state
-            audioLevel={remoteAudioLevel}
-            showVoiceFrame={true}
-          />
-        </div>
-
-        {/* Self Video - Picture in Picture (NOW WORKING) */}
+        {/* 원격 비디오 - 1:1 상황에서는 첫 번째 peer만 표시 */}
+        {remotePeers.length > 0 ? (
+          <div className="absolute inset-4">
+            <VideoPreview
+              stream={remotePeers[0].stream || null}
+              nickname={remotePeers[0].nickname}
+              isVideoEnabled={remotePeers[0].videoEnabled}
+              // audioLevel은 별도 구현 필요
+            />
+            {/* 연결 상태 피드백 오버레이 */}
+            {(() => {
+              const peer = remotePeers[0];
+              if (peer.connectionState === 'connecting') {
+                return (
+                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg">
+                    <p className="text-white text-lg font-medium">연결 중...</p>
+                  </div>
+                );
+              } else if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
+                return (
+                  <div className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-lg">
+                    <p className="text-white text-lg font-medium">연결이 끊겼습니다.</p>
+                  </div>
+                );
+              }
+              return null; // connected 상태에서는 오버레이 표시 안 함
+            })()}
+          </div>
+        ) : (
+          <div className="absolute inset-4 flex items-center justify-center bg-muted/50 rounded-lg">
+            <p className="text-muted-foreground">Waiting for another participant...</p>
+          </div>
+        )}
+        
+        {/* 로컬 비디오 (Picture-in-Picture) */}
         <div className="absolute bottom-24 right-6 w-48 lg:w-64 aspect-video z-20">
           <VideoPreview
             stream={localStream}
-            nickname={connectionDetails.nickname}
-            isVideoEnabled={mediaPreferences.videoEnabled}
+            nickname={nickname || "You"}
+            isVideoEnabled={isVideoEnabled}
             isLocalVideo={true}
           />
         </div>
       </div>
 
-      {/* Side Panels - Formula 8: Complexity Solution */}
       <ChatPanel isOpen={activePanel === "chat"} onClose={() => setActivePanel("none")} />
       <WhiteboardPanel isOpen={activePanel === "whiteboard"} onClose={() => setActivePanel("none")} />
       <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel("none")} />
 
-      {/* Control Bar - Formula 4: Dynamic visibility */}
-      <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${
-        showControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10 pointer-events-none"
-      }`}>
+      <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
         <ControlBar
-          isAudioEnabled={mediaPreferences.audioEnabled}
-          isVideoEnabled={mediaPreferences.videoEnabled}
+          isAudioEnabled={isAudioEnabled}
+          isVideoEnabled={isVideoEnabled}
           activePanel={activePanel}
           onToggleAudio={toggleAudio}
           onToggleVideo={toggleVideo}
           onToggleChat={() => setActivePanel("chat")}
           onToggleWhiteboard={() => setActivePanel("whiteboard")}
-          onScreenShare={() => handleScreenShare(toast)}
+          onScreenShare={() => toggleScreenShare(toast)}
           onOpenSettings={() => setActivePanel("settings")}
-          onLeave={() => handleLeaveRoom(navigate, toast)}
+          onLeave={() => { cleanup(); navigate('/'); }}
         />
       </div>
     </div>
