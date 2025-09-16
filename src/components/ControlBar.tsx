@@ -9,7 +9,7 @@ import {
   MoreHorizontal,
   PhoneOff,
   Settings,
-  Share,
+  LayoutGrid, // 변경점: 아이콘 추가
   ScreenShare
 } from "lucide-react";
 import {
@@ -18,36 +18,40 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ViewMode } from "@/stores/useWebRTCStore"; // 변경점: 타입 import
 
 interface ControlBarProps {
   isAudioEnabled: boolean;
   isVideoEnabled: boolean;
   activePanel: "none" | "chat" | "whiteboard" | "settings";
+  viewMode: ViewMode; // 변경점: 현재 뷰 모드 prop 추가
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onToggleChat: () => void;
   onToggleWhiteboard: () => void;
   onScreenShare: () => void;
   onOpenSettings: () => void;
+  onSetViewMode: (mode: ViewMode) => void; // 변경점: 뷰 모드 변경 함수 prop 추가
   onLeave: () => void;
 }
 
-// Formula 3 & 4: Creative Connection with Dynamic Behavior
 export const ControlBar = ({
   isAudioEnabled,
   isVideoEnabled,
   activePanel,
+  viewMode,
   onToggleAudio,
   onToggleVideo,
   onToggleChat,
   onToggleWhiteboard,
   onScreenShare,
   onOpenSettings,
+  onSetViewMode,
   onLeave
 }: ControlBarProps) => {
   return (
     <div className="control-panel flex items-center gap-3 px-6 py-3">
-      {/* Core Controls - Always Visible */}
+      {/* Core Controls */}
       <Button
         variant={isAudioEnabled ? "secondary" : "destructive"}
         size="lg"
@@ -66,9 +70,9 @@ export const ControlBar = ({
         {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
       </Button>
 
-      {/* Collaboration Tools */}
       <div className="w-px h-8 bg-border/50 mx-2" />
 
+      {/* Collaboration Tools */}
       <Button
         variant="secondary"
         size="lg"
@@ -86,8 +90,7 @@ export const ControlBar = ({
       >
         <Palette className="w-5 h-5" />
       </Button>
-
-      {/* Screen Share */}
+      
       <Button
         variant="secondary"
         size="lg"
@@ -96,6 +99,23 @@ export const ControlBar = ({
       >
         <ScreenShare className="w-5 h-5" />
       </Button>
+
+      {/* 변경점: 뷰 모드 변경 드롭다운 메뉴 추가 */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="secondary" size="lg" className="fab">
+            <LayoutGrid className="w-5 h-5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="center" side="top" className="mb-2">
+          <DropdownMenuItem onClick={() => onSetViewMode('speaker')} disabled={viewMode === 'speaker'}>
+            Speaker View
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onSetViewMode('grid')} disabled={viewMode === 'grid'}>
+            Grid View
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* More Actions Menu */}
       <DropdownMenu>
@@ -109,16 +129,12 @@ export const ControlBar = ({
             <Settings className="w-4 h-4 mr-2" />
             Settings
           </DropdownMenuItem>
-          <DropdownMenuItem className="text-destructive">
-            <PhoneOff className="w-4 h-4 mr-2" />
-            Audio Only Mode
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Leave Button */}
       <div className="w-px h-8 bg-border/50 mx-2" />
       
+      {/* Leave Button */}
       <Button
         variant="destructive"
         size="lg"
