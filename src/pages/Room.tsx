@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { useWebRTCStore, PeerState } from "@/stores/useWebRTCStore";
-import { useLobbyStore } from "@/stores/useLobbyStore";
+import { useLobbyStore } from "@/stores/useLobbyStore"; // 핵심: Lobby 스토어를 import합니다.
 import { ControlBar } from "@/components/ControlBar";
 import { ChatPanel } from "@/components/ChatPanel";
 import { WhiteboardPanel } from "@/components/WhiteboardPanel";
@@ -12,8 +12,8 @@ import { toast } from "sonner";
 const Room = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { roomTitle } = useParams<{ roomTitle: string }>();
   
-  // Zustand 스토어에서 상태와 액션을 가져옵니다.
   const {
     localStream,
     peers,
@@ -32,22 +32,22 @@ const Room = () => {
 
   const nickname = useWebRTCStore(state => state.nickname);
 
-  // 로비에서 전달받은 미디어 스트림을 사용합니다.
+  // 변경점: location.state 대신 useLobbyStore에서 스트림을 직접 가져옵니다.
   const lobbyStream = useLobbyStore((s) => s.stream);
-  const initialStream = lobbyStream ?? null;
-  const connectionDetails = location.state?.connectionDetails;
-
+  const { connectionDetails, mediaPreferences } = location.state || {};
+  
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
-    if (!initialStream || !connectionDetails) {
-      toast.error("Invalid access. Redirecting to home.");
-      navigate("/");
+    // 변경점: 이제 lobbyStream의 존재 여부를 확인합니다.
+    if (!roomTitle || !connectionDetails || !mediaPreferences || !lobbyStream) {
+      toast.error("Invalid room access. Please prepare in the lobby first.");
+      navigate(`/lobby/${roomTitle || ''}`);
       return;
     }
 
-    // WebRTC 및 시그널링 초기화
-    init(connectionDetails.roomTitle, connectionDetails.userId, connectionDetails.nickname, initialStream);
+    // 변경점: 초기화 시 lobbyStream을 전달합니다.
+    init(decodeURIComponent(roomTitle), connectionDetails.userId, connectionDetails.nickname, lobbyStream);
 
     return () => {
       cleanup();
@@ -55,7 +55,7 @@ const Room = () => {
         clearTimeout(hideControlsTimeoutRef.current);
       }
     };
-  }, [init, cleanup, navigate, initialStream, connectionDetails]);
+  }, [roomTitle, connectionDetails, mediaPreferences, lobbyStream, init, cleanup, navigate]);
 
   const handleMouseMove = () => {
     setShowControls(true);
@@ -81,32 +81,29 @@ const Room = () => {
       </div>
 
       <div className="flex-1 relative">
-        {/* 원격 비디오 - 1:1 상황에서는 첫 번째 peer만 표시 */}
         {remotePeers.length > 0 ? (
           <div className="absolute inset-4">
             <VideoPreview
               stream={remotePeers[0].stream || null}
               nickname={remotePeers[0].nickname}
               isVideoEnabled={remotePeers[0].videoEnabled}
-              // audioLevel은 별도 구현 필요
             />
-            {/* 연결 상태 피드백 오버레이 */}
             {(() => {
               const peer = remotePeers[0];
               if (peer.connectionState === 'connecting') {
                 return (
                   <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg">
-                    <p className="text-white text-lg font-medium">연결 중...</p>
+                    <p className="text-white text-lg font-medium">Connecting...</p>
                   </div>
                 );
               } else if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
                 return (
                   <div className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-lg">
-                    <p className="text-white text-lg font-medium">연결이 끊겼습니다.</p>
+                    <p className="text-white text-lg font-medium">Connection lost.</p>
                   </div>
                 );
               }
-              return null; // connected 상태에서는 오버레이 표시 안 함
+              return null;
             })()}
           </div>
         ) : (
@@ -115,7 +112,6 @@ const Room = () => {
           </div>
         )}
         
-        {/* 로컬 비디오 (Picture-in-Picture) */}
         <div className="absolute bottom-24 right-6 w-48 lg:w-64 aspect-video z-20">
           <VideoPreview
             stream={localStream}

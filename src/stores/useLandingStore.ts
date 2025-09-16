@@ -9,7 +9,7 @@ interface LandingActions {
   setRoomTitle: (title: string) => void;
   setNickname: (nickname: string) => void;
   generateRandomNickname: () => string;
-  handleConnect: (navigate: (path: string) => void, toast: any) => void;
+  handleConnect: (navigate: (path: string, options?: { state: any }) => void, toast: any) => void;
   reset: () => void;
 }
 
@@ -33,7 +33,9 @@ export const useLandingStore = create<LandingState & LandingActions>((set, get) 
     return generatedName;
   },
 
-  handleConnect: (navigate: (path: string) => void, toast: any) => {
+  // 변경: sessionStorage를 제거하고, react-router의 state를 통해 닉네임을 전달합니다.
+  // 방 제목은 URL 파라미터로 전달합니다.
+  handleConnect: (navigate, toast) => {
     const { roomTitle, nickname } = get();
     
     if (!roomTitle.trim()) {
@@ -43,14 +45,12 @@ export const useLandingStore = create<LandingState & LandingActions>((set, get) 
 
     const finalNickname = nickname.trim() || get().generateRandomNickname();
     
-    // Store connection details for the lobby
-    sessionStorage.setItem("connectionDetails", JSON.stringify({
-      roomTitle: roomTitle.trim(),
-      nickname: finalNickname
-    }));
-
-    toast.success(`Connecting as "${finalNickname}"...`);
-    navigate("/lobby");
+    toast.success(`Preparing to join as "${finalNickname}"...`);
+    
+    // URL에 방 제목을 포함하고, state에 닉네임을 담아 Lobby로 이동합니다.
+    navigate(`/lobby/${encodeURIComponent(roomTitle.trim())}`, { 
+      state: { nickname: finalNickname } 
+    });
   },
 
   reset: () => set({ roomTitle: "", nickname: "" })

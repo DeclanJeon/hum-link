@@ -19,8 +19,12 @@ const Landing = () => {
 
   const handleNicknameGenerate = () => {
     const randomName = generateRandomNickname();
-    toast("✨ Perfect! This name suits you", { duration: 2000 });
+    toast(" Perfect! This name suits you", { duration: 2000 });
   };
+
+  // 수정: handleConnect에 navigate 함수를 전달하는 방식은 동일합니다.
+  // 내부 로직이 변경되어 URL 파라미터를 사용해 이동합니다.
+  const connect = () => handleConnect(navigate, toast);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background relative overflow-hidden">
@@ -52,7 +56,7 @@ const Landing = () => {
               value={roomTitle}
               onChange={(e) => setRoomTitle(e.target.value)}
               className="h-12 text-lg bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20"
-              onKeyDown={(e) => e.key === "Enter" && handleConnect(navigate, toast)}
+              onKeyDown={(e) => e.key === "Enter" && connect()}
             />
           </div>
 
@@ -69,7 +73,7 @@ const Landing = () => {
                 onClick={handleNicknameGenerate}
                 className="text-primary hover:text-primary-glow text-sm"
               >
-                ✨ Inspire me
+                 Inspire me
               </Button>
             </div>
             <Input
@@ -78,13 +82,13 @@ const Landing = () => {
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
               className="h-12 text-lg bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20"
-              onKeyDown={(e) => e.key === "Enter" && handleConnect(navigate, toast)}
+              onKeyDown={(e) => e.key === "Enter" && connect()}
             />
           </div>
 
           {/* Connection Button - The Only Action */}
           <Button
-            onClick={() => handleConnect(navigate, toast)}
+            onClick={connect}
             className="w-full h-14 text-lg btn-connection mt-8"
             disabled={!roomTitle.trim()}
           >
