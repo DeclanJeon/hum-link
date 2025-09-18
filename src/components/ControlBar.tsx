@@ -26,6 +26,9 @@ interface ControlBarProps {
   isSharingScreen: boolean; // 변경점: 화면 공유 상태 prop 추가
   activePanel: "none" | "chat" | "whiteboard" | "settings";
   viewMode: ViewMode; // 변경점: 현재 뷰 모드 prop 추가
+  // ====================== [ ✨ 신규 추가 ✨ ] ======================
+  unreadMessageCount: number;
+  // ==============================================================
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onToggleChat: () => void;
@@ -42,6 +45,9 @@ export const ControlBar = ({
   isSharingScreen, // 변경점: prop 사용
   activePanel,
   viewMode,
+  // ====================== [ ✨ 신규 추가 ✨ ] ======================
+  unreadMessageCount,
+  // ==============================================================
   onToggleAudio,
   onToggleVideo,
   onToggleChat,
@@ -75,14 +81,23 @@ export const ControlBar = ({
       <div className="w-px h-8 bg-border/50 mx-2" />
 
       {/* Collaboration Tools */}
-      <Button
-        variant="secondary"
-        size="lg"
-        onClick={onToggleChat}
-        className={`fab ${activePanel === "chat" ? "active" : ""}`}
-      >
-        <MessageSquare className="w-5 h-5" />
-      </Button>
+      {/* ====================== [ 🚀 UI 수정 🚀 ] ====================== */}
+      <div className="relative">
+        <Button
+          variant="secondary"
+          size="lg"
+          onClick={onToggleChat}
+          className={`fab ${activePanel === "chat" ? "active" : ""}`}
+        >
+          <MessageSquare className="w-5 h-5" />
+        </Button>
+        {unreadMessageCount > 0 && (
+          <div className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-xs font-bold text-destructive-foreground pointer-events-none">
+            {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+          </div>
+        )}
+      </div>
+      {/* ============================================================== */}
 
       <Button
         variant="secondary"

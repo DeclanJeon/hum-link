@@ -61,23 +61,29 @@ interface WebRTCState {
   webRTCManager: WebRTCManager | null;
   peers: Map<string, PeerState>;
   chatMessages: ChatMessage[];
+  // ====================== [ ✨ 신규 추가 ✨ ] ======================
+  unreadMessageCount: number; // 읽지 않은 메시지 개수
+  // ==============================================================
   activePanel: 'chat' | 'whiteboard' | 'settings' | 'none';
   showControls: boolean;
   viewMode: ViewMode;
 }
 
 // WebRTC 액션 인터페이스 (변경 없음)
-interface WebRTCActions {
-  init: (roomId: string, userId: string, nickname: string, localStream: MediaStream) => void;
-  cleanup: () => void;
-  toggleAudio: () => void;
-  toggleVideo: () => void;
-  toggleScreenShare: (toast: any) => Promise<void>;
-  sendChatMessage: (text: string) => void;
-  setActivePanel: (panel: WebRTCState['activePanel']) => void;
-  setShowControls: (show: boolean) => void;
-  setViewMode: (mode: ViewMode) => void;
-}
+ interface WebRTCActions {
+   init: (roomId: string, userId: string, nickname: string, localStream: MediaStream) => void;
+   cleanup: () => void;
+   toggleAudio: () => void;
+   toggleVideo: () => void;
+   toggleScreenShare: (toast: any) => Promise<void>;
+   sendChatMessage: (text: string) => void;
+   setActivePanel: (panel: WebRTCState['activePanel']) => void;
+   // ====================== [ ✨ 신규 추가 ✨ ] ======================
+   resetUnreadMessageCount: () => void; // 카운트 초기화 액션
+   // ==============================================================
+   setShowControls: (show: boolean) => void;
+   setViewMode: (mode: ViewMode) => void;
+ }
 
 const SIGNALING_SERVER_URL = import.meta.env.VITE_SIGNALING_SERVER_URL;
 
@@ -98,6 +104,7 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
   webRTCManager: null,
   peers: new Map(),
   chatMessages: [],
+  unreadMessageCount: 0, // 초기값 0으로 설정
   activePanel: 'none',
   showControls: true,
   viewMode: 'speaker',
@@ -134,6 +141,12 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
           set(produce(state => {
             if (!state.chatMessages.some(msg => msg.id === data.id)) {
               state.chatMessages.push(data);
+              // ====================== [ ✨ 로직 추가 ✨ ] ======================
+              // 채팅 패널이 닫혀 있을 때만 카운트 증가
+              if (state.activePanel !== 'chat') {
+                state.unreadMessageCount += 1;
+              }
+              // ==============================================================
             }
           }));
           return;
@@ -316,7 +329,24 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
     }
   },
 
-  setActivePanel: (panel) => set({ activePanel: get().activePanel === panel ? 'none' : panel }),
+  // ====================== [ ✨ 로직 수정 및 추가 ✨ ] ======================
+  setActivePanel: (panel) => {
+    const currentPanel = get().activePanel;
+    const newPanel = currentPanel === panel ? 'none' : panel;
+    
+    // 채팅 패널을 열 때, 읽지 않은 메시지 카운트를 초기화합니다.
+    if (newPanel === 'chat') {
+      get().resetUnreadMessageCount();
+    }
+    
+    set({ activePanel: newPanel });
+  },
+
+  resetUnreadMessageCount: () => {
+    set({ unreadMessageCount: 0 });
+  },
+  // ======================================================================
+
   setShowControls: (show) => set({ showControls: show }),
   setViewMode: (mode) => set({ viewMode: mode }),
 }));

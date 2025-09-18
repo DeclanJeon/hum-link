@@ -114,24 +114,27 @@ const Room = () => {
   const location = useLocation();
   const { roomTitle } = useParams<{ roomTitle: string }>();
   
-  const {
-    localStream,
-    peers,
-    isAudioEnabled,
-    isVideoEnabled,
-    isSharingScreen,
-    activePanel,
-    showControls,
-    viewMode,
-    init,
-    cleanup,
-    toggleAudio,
-    toggleVideo,
-    toggleScreenShare,
-    setActivePanel,
-    setShowControls,
-    setViewMode,
-  } = useWebRTCStore();
+   const {
+     localStream,
+     peers,
+     isAudioEnabled,
+     isVideoEnabled,
+     isSharingScreen,
+     activePanel,
+     showControls,
+     viewMode,
+     // ====================== [ ✨ 신규 추가 ✨ ] ======================
+     unreadMessageCount,
+     // ==============================================================
+     init,
+     cleanup,
+     toggleAudio,
+     toggleVideo,
+     toggleScreenShare,
+     setActivePanel,
+     setShowControls,
+     setViewMode,
+   } = useWebRTCStore();
 
   const nickname = useWebRTCStore(state => state.nickname);
   const lobbyStream = useLobbyStore((s) => s.stream);
@@ -200,6 +203,9 @@ const Room = () => {
           isSharingScreen={isSharingScreen}
           activePanel={activePanel}
           viewMode={viewMode}
+          // ====================== [ ✨ props 전달 ✨ ] ======================
+          unreadMessageCount={unreadMessageCount}
+          // ==============================================================
           onToggleAudio={toggleAudio}
           onToggleVideo={toggleVideo}
           onToggleChat={() => setActivePanel("chat")}
