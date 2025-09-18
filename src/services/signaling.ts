@@ -56,4 +56,8 @@ export class SignalingClient {
   public updateMediaState(kind: 'audio' | 'video', enabled: boolean) {
     this.socket?.emit("update-media-state", { kind, enabled });
   }
+
+  public sendScreenShareState(enabled: boolean) {
+    this.socket?.emit("screen-share-state", { enabled });
+  }
 }

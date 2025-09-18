@@ -3,7 +3,7 @@ import { SignalingClient } from '@/services/signaling';
 import { WebRTCManager } from '@/services/webrtc';
 import { produce } from 'immer';
 
-// Peer 상태 인터페이스 (기존과 동일)
+// Peer 상태 인터페이스
 export interface PeerState {
   userId: string;
   nickname: string;
@@ -14,7 +14,7 @@ export interface PeerState {
   connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
 }
 
-// 채팅 메시지 인터페이스 (기존과 동일)
+// 채팅 메시지 인터페이스
 export interface ChatMessage {
   id: string;
   text: string;
@@ -35,7 +35,6 @@ function isChatMessage(obj: any): obj is ChatMessage {
   );
 }
 
-// 변경점: 뷰 모드 타입을 정의합니다.
 export type ViewMode = 'speaker' | 'grid';
 
 interface WebRTCState {
@@ -62,7 +61,7 @@ interface WebRTCState {
   // UI 상태
   activePanel: 'chat' | 'whiteboard' | 'settings' | 'none';
   showControls: boolean;
-  viewMode: ViewMode; // 변경점: 뷰 모드 상태 추가
+  viewMode: ViewMode;
 }
 
 interface WebRTCActions {
@@ -81,13 +80,13 @@ interface WebRTCActions {
   // UI 컨트롤
   setActivePanel: (panel: WebRTCState['activePanel']) => void;
   setShowControls: (show: boolean) => void;
-  setViewMode: (mode: ViewMode) => void; // 변경점: 뷰 모드 설정 액션 추가
+  setViewMode: (mode: ViewMode) => void;
 }
 
 const SIGNALING_SERVER_URL = import.meta.env.VITE_SIGNALING_SERVER_URL;
 
 export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => ({
-  // ... 기존 상태들 ...
+  // 초기 상태
   roomId: null,
   userId: null,
   nickname: null,
@@ -102,9 +101,8 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
   chatMessages: [],
   activePanel: 'none',
   showControls: true,
-  viewMode: 'speaker', // 변경점: 뷰 모드 기본값 설정
+  viewMode: 'speaker',
 
-  // ... 기존 init, cleanup, 미디어 토글, 채팅 함수들 ...
   init: (roomId, userId, nickname, localStream) => {
     if (!SIGNALING_SERVER_URL) {
       throw new Error("VITE_SIGNALING_SERVER_URL is not defined in .env");
@@ -113,30 +111,44 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
     const webRTCManager = new WebRTCManager(localStream, {
       onSignal: (peerId, signal) => get().signalingClient?.sendSignal(peerId, signal),
       onConnect: (peerId) => {
-        set(produce(state => { state.peers.get(peerId)!.connectionState = 'connected'; }));
+        set(produce(state => { 
+          const peer = state.peers.get(peerId);
+          if (peer) {
+            peer.connectionState = 'connected';
+          }
+        }));
         console.log(`[WebRTC] Connected to ${peerId}`);
       },
       onStream: (peerId, stream) => {
-        set(produce(state => { state.peers.get(peerId)!.stream = stream; }));
+        set(produce(state => { 
+          const peer = state.peers.get(peerId);
+          if (peer) {
+            peer.stream = stream;
+          }
+        }));
       },
       onData: (peerId, data) => {
-        try {
-          const parsedData = JSON.parse(data.toString());
-          if (isChatMessage(parsedData)) {
-            set(produce(state => { state.chatMessages.push(parsedData); }));
-          } else {
-            console.warn("Received data does not conform to ChatMessage interface:", parsedData);
-          }
-        } catch (error) {
-          console.error("Failed to parse data channel message:", error);
+        if (isChatMessage(data)) {
+          set(produce(state => { 
+            state.chatMessages.push(data); 
+          }));
+        } else {
+          console.warn("Received data does not conform to ChatMessage interface:", data);
         }
       },
       onClose: (peerId) => {
-        set(produce(state => { state.peers.delete(peerId); }));
+        set(produce(state => { 
+          state.peers.delete(peerId); 
+        }));
       },
       onError: (peerId, error) => {
         console.error(`[WebRTC] Error with peer ${peerId}:`, error);
-        set(produce(state => { state.peers.get(peerId)!.connectionState = 'failed'; }));
+        set(produce(state => { 
+          const peer = state.peers.get(peerId);
+          if (peer) {
+            peer.connectionState = 'failed';
+          }
+        }));
       },
     });
 
@@ -174,7 +186,9 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
       },
       onUserLeft: (userId) => {
         get().webRTCManager?.removePeer(userId);
-        set(produce(state => { state.peers.delete(userId); }));
+        set(produce(state => { 
+          state.peers.delete(userId); 
+        }));
       },
       onSignal: ({ from, signal }) => {
         const webRTCManager = get().webRTCManager;
@@ -203,10 +217,18 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
     get().webRTCManager?.destroyAll();
     get().signalingClient?.disconnect();
     get().localStream?.getTracks().forEach(track => track.stop());
+    get().originalCameraStream?.getTracks().forEach(track => track.stop());
     set({
-      roomId: null, userId: null, nickname: null, localStream: null,
-      webRTCManager: null, signalingClient: null, peers: new Map(), chatMessages: [],
-      viewMode: 'speaker' // 클린업 시 기본값으로 리셋
+      roomId: null, 
+      userId: null, 
+      nickname: null, 
+      localStream: null,
+      originalCameraStream: null,
+      webRTCManager: null, 
+      signalingClient: null, 
+      peers: new Map(), 
+      chatMessages: [],
+      viewMode: 'speaker'
     });
   },
 
@@ -218,25 +240,233 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
   },
 
   toggleVideo: () => {
-    const enabled = !get().isVideoEnabled;
-    get().localStream?.getVideoTracks().forEach(track => track.enabled = enabled);
-    get().signalingClient?.updateMediaState('video', enabled);
+    const { isVideoEnabled, isSharingScreen } = get();
+    const enabled = !isVideoEnabled;
+
+    if (!isSharingScreen) {
+      get().localStream?.getVideoTracks().forEach(track => track.enabled = enabled);
+      get().signalingClient?.updateMediaState('video', enabled);
+    }
     set({ isVideoEnabled: enabled });
   },
   
   toggleScreenShare: async (toast) => {
-    // ... 기존 화면 공유 로직 ...
+    const {
+      isSharingScreen,
+      localStream,
+      originalCameraStream,
+      webRTCManager,
+      isAudioEnabled,
+      isVideoEnabled,
+    } = get();
+
+    if (isSharingScreen) {
+      // 화면 공유 중지
+      console.log('[ScreenShare] Stopping screen share...');
+      
+      if (!originalCameraStream) {
+        console.error('[ScreenShare] No original stream to restore');
+        toast.error("Cannot restore camera - original stream not found");
+        return;
+      }
+
+      try {
+        // 1. 현재 화면 공유 트랙 중지
+        const screenTracks = localStream?.getVideoTracks() || [];
+        screenTracks.forEach(track => {
+          console.log('[ScreenShare] Stopping screen track:', track.label);
+          track.stop();
+        });
+
+        // 2. 원본 카메라 트랙 확인
+        const cameraVideoTrack = originalCameraStream.getVideoTracks()[0];
+        if (!cameraVideoTrack) {
+          throw new Error('No camera video track available');
+        }
+
+        // 트랙이 'ended' 상태인지 확인
+        if (cameraVideoTrack.readyState === 'ended') {
+          console.error('[ScreenShare] Camera track is ended, recreating stream...');
+          
+          // 새로운 카메라 스트림 생성
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true
+          });
+          
+          newStream.getVideoTracks().forEach(t => t.enabled = isVideoEnabled);
+          newStream.getAudioTracks().forEach(t => t.enabled = isAudioEnabled);
+          
+          // 새 스트림으로 트랙 교체
+          const newVideoTrack = newStream.getVideoTracks()[0];
+          const success = await webRTCManager?.replaceTrack(newVideoTrack);
+          
+          if (!success) {
+            throw new Error('Failed to replace track with new stream');
+          }
+          
+          set({
+            localStream: newStream,
+            isSharingScreen: false,
+            originalCameraStream: null,
+          });
+          
+          toast.success("Camera reinitialized");
+          return;
+        }
+
+        // 3. 트랙 enabled 상태 설정
+        cameraVideoTrack.enabled = isVideoEnabled;
+        console.log('[ScreenShare] Camera track enabled:', isVideoEnabled);
+
+        // 4. 모든 peer connection에 대해 트랙 교체
+        const replaceSuccess = await webRTCManager?.replaceTrack(cameraVideoTrack);
+        
+        if (!replaceSuccess) {
+          throw new Error('Failed to replace track in peer connections');
+        }
+
+        // 5. 오디오 트랙 상태 복원
+        originalCameraStream.getAudioTracks().forEach(track => {
+          track.enabled = isAudioEnabled;
+        });
+
+        // 6. 로컬 스트림 업데이트
+        set({
+          localStream: originalCameraStream,
+          isSharingScreen: false,
+          originalCameraStream: null,
+        });
+
+        // 7. 시그널링 서버에 상태 변경 알림
+        get().signalingClient?.updateMediaState('video', isVideoEnabled);
+
+        console.log('[ScreenShare] Successfully restored camera');
+        toast.info("Camera restored");
+
+      } catch (error) {
+        console.error('[ScreenShare] Error restoring camera:', error);
+        toast.error("Failed to restore camera properly");
+        
+        // 에러 시 폴백: 완전히 새로운 스트림 생성
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true
+          });
+          
+          newStream.getVideoTracks().forEach(t => t.enabled = isVideoEnabled);
+          newStream.getAudioTracks().forEach(t => t.enabled = isAudioEnabled);
+          
+          await webRTCManager?.updateLocalStream(newStream);
+          
+          set({
+            localStream: newStream,
+            isSharingScreen: false,
+            originalCameraStream: null,
+          });
+          
+          toast.success("Camera reinitialized");
+        } catch (fallbackError) {
+          console.error('[ScreenShare] Fallback failed:', fallbackError);
+          toast.error("Could not restore camera. Please refresh the page.");
+        }
+      }
+
+    } else {
+      // 화면 공유 시작
+      try {
+        console.log('[ScreenShare] Starting screen share...');
+        
+        const screenStream = await navigator.mediaDevices.getDisplayMedia();
+        
+        const screenTrack = screenStream.getVideoTracks()[0];
+        
+        if (!screenTrack) {
+          throw new Error('No screen track obtained');
+        }
+
+        if (!localStream) {
+          toast.error("No local stream available");
+          screenStream.getTracks().forEach(t => t.stop());
+          return;
+        }
+        
+        // 현재 카메라 스트림 저장
+        set({ originalCameraStream: localStream });
+
+        // 모든 peer에 대해 트랙 교체
+        const success = await webRTCManager?.replaceTrack(screenTrack);
+        
+        if (!success) {
+          throw new Error('Failed to replace track in peer connections');
+        }
+        
+        // 새 로컬 스트림 생성
+        const newLocalStream = new MediaStream([
+          ...localStream.getAudioTracks(),
+          screenTrack
+        ]);
+
+        set({
+          localStream: newLocalStream,
+          isSharingScreen: true
+        });
+
+        // 사용자가 화면 공유를 중지할 때
+        screenTrack.onended = () => {
+          console.log('[ScreenShare] User ended screen share');
+          if (get().isSharingScreen) {
+            get().toggleScreenShare(toast);
+          }
+        };
+
+        console.log('[ScreenShare] Screen sharing started successfully');
+        toast.success("Screen sharing started");
+        
+      } catch (err: any) {
+        console.error('[ScreenShare] Error:', err);
+        
+        // 원본 스트림 복원
+        const original = get().originalCameraStream;
+        if (original) {
+          set({
+            originalCameraStream: null
+          });
+        }
+        
+        if (err.name === 'NotAllowedError') {
+          toast.error("Screen sharing permission denied");
+        } else {
+          toast.error(`Failed to start screen sharing: ${err.message}`);
+        }
+      }
+    }
   },
 
   sendChatMessage: (text: string) => {
-    // ... 기존 채팅 메시지 전송 로직 ...
+    const { userId, nickname, webRTCManager } = get();
+    if (!userId || !nickname) return;
+    
+    const message: ChatMessage = {
+      id: `${userId}-${Date.now()}`,
+      text,
+      senderId: userId,
+      senderNickname: nickname,
+      timestamp: Date.now(),
+    };
+    
+    webRTCManager?.sendChatMessage(message);
+    set(produce(state => {
+      state.chatMessages.push(message);
+    }));
   },
 
   setActivePanel: (panel) => {
     set({ activePanel: get().activePanel === panel ? 'none' : panel });
   },
+  
   setShowControls: (show) => set({ showControls: show }),
-
-  // 변경점: 뷰 모드를 설정하는 액션 구현
+  
   setViewMode: (mode) => set({ viewMode: mode }),
 }));

@@ -34,9 +34,9 @@ export class WebRTCManager {
   public createPeer(peerId: string): PeerInstance {
     console.log('[WebRTCManager] Creating peer (initiator)', { peerId });
     const peer = new Peer({
-      initiator: true, // 이쪽에서 연결을 시작함
+      initiator: true,
       stream: this.localStream,
-      trickle: true, // ICE candidate를 점진적으로 교환
+      trickle: true,
     });
 
     this.setupPeerEvents(peer, peerId);
@@ -54,12 +54,12 @@ export class WebRTCManager {
   public receiveSignal(peerId: string, signal: SignalData): PeerInstance {
     console.log('[WebRTCManager] Receiving signal and creating peer (non-initiator)', { peerId, signalType: signal.type });
     const peer = new Peer({
-      initiator: false, // 상대방이 연결을 시작했음
+      initiator: false,
       stream: this.localStream,
       trickle: true,
     });
 
-    peer.signal(signal); // 수신한 시그널로 연결 설정
+    peer.signal(signal);
     this.setupPeerEvents(peer, peerId);
     this.peers.set(peerId, peer);
     console.log('[WebRTCManager] Peer created and stored from signal', { peerId });
@@ -100,23 +100,102 @@ export class WebRTCManager {
   }
 
   /**
-   * 화면 공유 스트림으로 기존 비디오 트랙을 교체합니다.
-   * @param screenStream 화면 공유 MediaStream
+   * 모든 연결된 Peer의 비디오 트랙을 교체합니다.
+   * simple-peer의 replaceTrack 메서드를 올바르게 사용하도록 수정되었습니다.
+   * @param newTrack 교체할 새로운 MediaStreamTrack (카메라 또는 화면)
+   * @returns 교체 성공 여부
    */
-  public replaceTrack(newStream: MediaStream) {
-    this.peers.forEach(peer => {
-        const oldTrack = this.localStream.getVideoTracks()[0];
-        const newTrack = newStream.getVideoTracks()[0];
-        if (oldTrack && newTrack) {
-            peer.replaceTrack(oldTrack, newTrack, this.localStream);
+  public async replaceTrack(newTrack: MediaStreamTrack): Promise<boolean> {
+    try {
+      const oldTrack = this.localStream.getVideoTracks()[0];
+      if (!oldTrack) {
+        console.error("[WebRTCManager] No old video track found to replace.");
+        return false;
+      }
+
+      // 모든 peer에 대해 트랙 교체 시도
+      this.peers.forEach((peer, peerId) => {
+        try {
+          // simple-peer의 replaceTrack은 Promise를 반환하지 않습니다.
+          // 에러가 발생하면 예외를 던지므로 try...catch로 잡습니다.
+          peer.replaceTrack(oldTrack, newTrack, this.localStream);
+          console.log(`[WebRTCManager] Track replacement initiated for peer ${peerId}`);
+        } catch (err) {
+          console.error(`[WebRTCManager] Failed to replace track for peer ${peerId}:`, err);
+          // 여기서 발생한 에러를 상위 catch 블록으로 던집니다.
+          throw err;
         }
-    });
-    // 새로운 화면 공유 스트림의 종료를 감지하기 위한 이벤트 리스너
-    newStream.getVideoTracks()[0].onended = () => {
-        // 원래 카메라 스트림으로 되돌리는 로직 필요 (useWebRTCStore에서 처리)
-    };
+      });
+
+      // 로컬 스트림의 트랙도 교체하여 내부 상태를 일치시킵니다.
+      // 이 작업은 peer.replaceTrack 호출 이후에 이루어져야 합니다.
+      this.localStream.removeTrack(oldTrack);
+      this.localStream.addTrack(newTrack);
+      
+      console.log('[WebRTCManager] Track replacement process completed for all peers.');
+      
+      // simple-peer의 replaceTrack은 비동기적으로 작동하지만,
+      // 즉시 반환되므로 성공적으로 호출되었다고 가정합니다.
+      return true;
+
+    } catch (error) {
+      console.error('[WebRTCManager] An error occurred during the track replacement process:', error);
+      // 에러가 발생했으므로 false를 반환합니다.
+      return false;
+    }
   }
 
+  /**
+   * 모든 peer connection에 대해 비디오 트랙 교체 (simple-peer용)
+   * @param newTrack 교체할 새로운 MediaStreamTrack
+   * @returns 교체 성공 여부
+   */
+  public async replaceVideoTrackForAllPeers(newTrack: MediaStreamTrack): Promise<boolean> {
+    return this.replaceTrack(newTrack);
+  }
+
+  /**
+   * 로컬 스트림 완전 교체 및 재협상
+   * @param newStream 새로운 MediaStream
+   */
+  public async updateLocalStream(newStream: MediaStream): Promise<void> {
+    this.localStream = newStream;
+    
+    // 모든 peer connection 재협상
+    for (const [peerId, peer] of this.peers.entries()) {
+      // 기존 트랙 제거
+      peer.getSenders().forEach(sender => {
+        if (sender.track) {
+          peer.removeTrack(sender);
+        }
+      });
+      
+      // 새 트랙 추가
+      newStream.getTracks().forEach(track => {
+        peer.addTrack(track, newStream);
+      });
+      
+      // 재협상
+      await this.createAndSendOffer(peerId);
+    }
+  }
+
+  /**
+   * Offer를 생성하고 전송합니다. (재협상용)
+   * @param peerId Peer ID
+   */
+  private async createAndSendOffer(peerId: string): Promise<void> {
+    const peer = this.peers.get(peerId);
+    if (peer) {
+      try {
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        this.events.onSignal(peerId, offer);
+      } catch (error) {
+        console.error('[WebRTC] Error creating offer:', error);
+      }
+    }
+  }
 
   /**
    * 특정 Peer 연결을 제거합니다.

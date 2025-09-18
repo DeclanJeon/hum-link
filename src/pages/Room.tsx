@@ -35,19 +35,17 @@ const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEnabled, 
   if (viewMode === 'grid') {
     const total = allParticipants.length;
 
-    // 변경점: 동적 클래스 생성을 정적 매핑으로 변경
     const getGridClass = (count: number) => {
       if (count <= 2) return 'grid-cols-2';
-      if (count <= 4) return 'grid-cols-2'; // 3, 4명일 때도 2x2가 보기 좋습니다.
+      if (count <= 4) return 'grid-cols-2';
       if (count <= 6) return 'grid-cols-3';
       if (count <= 9) return 'grid-cols-3';
-      return 'grid-cols-4'; // 최대 16명까지
+      return 'grid-cols-4';
     };
 
     const gridClass = getGridClass(total);
 
     return (
-      // Tailwind가 인식할 수 있도록 정적 문자열을 사용합니다.
       <div className={`grid ${gridClass} gap-4 w-full h-full p-4`}>
         {allParticipants.map(p => (
           <div key={p.userId} className="w-full h-full">
@@ -108,9 +106,8 @@ const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEnabled, 
   );
 };
 
-
 // ====================================================================
-// Room 컴포넌트 (이 부분은 변경 없음)
+// Room 컴포넌트
 // ====================================================================
 const Room = () => {
   const navigate = useNavigate();
@@ -122,6 +119,7 @@ const Room = () => {
     peers,
     isAudioEnabled,
     isVideoEnabled,
+    isSharingScreen,
     activePanel,
     showControls,
     viewMode,
@@ -199,6 +197,7 @@ const Room = () => {
         <ControlBar
           isAudioEnabled={isAudioEnabled}
           isVideoEnabled={isVideoEnabled}
+          isSharingScreen={isSharingScreen}
           activePanel={activePanel}
           viewMode={viewMode}
           onToggleAudio={toggleAudio}

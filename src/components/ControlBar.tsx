@@ -23,6 +23,7 @@ import { ViewMode } from "@/stores/useWebRTCStore"; // 변경점: 타입 import
 interface ControlBarProps {
   isAudioEnabled: boolean;
   isVideoEnabled: boolean;
+  isSharingScreen: boolean; // 변경점: 화면 공유 상태 prop 추가
   activePanel: "none" | "chat" | "whiteboard" | "settings";
   viewMode: ViewMode; // 변경점: 현재 뷰 모드 prop 추가
   onToggleAudio: () => void;
@@ -38,6 +39,7 @@ interface ControlBarProps {
 export const ControlBar = ({
   isAudioEnabled,
   isVideoEnabled,
+  isSharingScreen, // 변경점: prop 사용
   activePanel,
   viewMode,
   onToggleAudio,
@@ -91,11 +93,12 @@ export const ControlBar = ({
         <Palette className="w-5 h-5" />
       </Button>
       
+      {/* 변경점: isSharingScreen 상태에 따라 버튼 스타일을 동적으로 변경 */}
       <Button
         variant="secondary"
         size="lg"
         onClick={onScreenShare}
-        className="fab"
+        className={`fab ${isSharingScreen ? "active" : ""}`}
       >
         <ScreenShare className="w-5 h-5" />
       </Button>
