@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { X, Send } from "lucide-react";
+import { useChatStore } from "@/stores/useChatStore";
 import { useWebRTCStore } from "@/stores/useWebRTCStore";
 
 interface ChatPanelProps {
@@ -11,7 +12,8 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
-  const { chatMessages, sendChatMessage, userId } = useWebRTCStore();
+  const { chatMessages } = useChatStore();
+  const { sendChatMessage, userId } = useWebRTCStore();
   const [newMessage, setNewMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 

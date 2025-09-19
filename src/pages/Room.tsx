@@ -1,146 +1,33 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
-import { useWebRTCStore, PeerState, ViewMode } from "@/stores/useWebRTCStore";
+import { useWebRTCStore } from "@/stores/useWebRTCStore";
+import { useUIManagementStore } from "@/stores/useUIManagementStore";
 import { useLobbyStore } from "@/stores/useLobbyStore";
+import { useAutoHideControls } from "@/hooks/useAutoHideControls";
 import { ControlBar } from "@/components/ControlBar";
 import { ChatPanel } from "@/components/ChatPanel";
 import { WhiteboardPanel } from "@/components/WhiteboardPanel";
-import { VideoPreview } from "@/components/VideoPreview";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { VideoLayout } from "@/components/VideoLayout";
 import { toast } from "sonner";
 
-// ====================================================================
-// 동적 레이아웃 컴포넌트
-// ====================================================================
-interface VideoLayoutProps {
-  viewMode: ViewMode;
-  localStream: MediaStream | null;
-  localNickname: string;
-  localVideoEnabled: boolean;
-  peers: PeerState[];
-}
-
-const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEnabled, peers }: VideoLayoutProps) => {
-  const allParticipants = [
-    { 
-      isLocal: true, 
-      userId: 'local', 
-      nickname: localNickname, 
-      stream: localStream, 
-      videoEnabled: localVideoEnabled 
-    },
-    ...peers.map(p => ({ ...p, isLocal: false }))
-  ];
-
-  if (viewMode === 'grid') {
-    const total = allParticipants.length;
-
-    const getGridClass = (count: number) => {
-      if (count <= 2) return 'grid-cols-2';
-      if (count <= 4) return 'grid-cols-2';
-      if (count <= 6) return 'grid-cols-3';
-      if (count <= 9) return 'grid-cols-3';
-      return 'grid-cols-4';
-    };
-
-    const gridClass = getGridClass(total);
-
-    return (
-      <div className={`grid ${gridClass} gap-4 w-full h-full p-4`}>
-        {allParticipants.map(p => (
-          <div key={p.userId} className="w-full h-full">
-            <VideoPreview
-              stream={p.stream || null}
-              nickname={p.nickname}
-              isVideoEnabled={p.videoEnabled}
-              isLocalVideo={p.isLocal}
-            />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // 기본값은 'speaker' 뷰
-  const remotePeer = peers.length > 0 ? peers[0] : null;
-  return (
-    <>
-      {remotePeer ? (
-        <div className="absolute inset-4">
-          <VideoPreview
-            stream={remotePeer.stream || null}
-            nickname={remotePeer.nickname}
-            isVideoEnabled={remotePeer.videoEnabled}
-          />
-          {(() => {
-            if (remotePeer.connectionState === 'connecting') {
-              return (
-                <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg">
-                  <p className="text-white text-lg font-medium">Connecting...</p>
-                </div>
-              );
-            } else if (remotePeer.connectionState === 'disconnected' || remotePeer.connectionState === 'failed') {
-              return (
-                <div className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-lg">
-                  <p className="text-white text-lg font-medium">Connection lost.</p>
-                </div>
-              );
-            }
-            return null;
-          })()}
-        </div>
-      ) : (
-        <div className="absolute inset-4 flex items-center justify-center bg-muted/50 rounded-lg">
-          <p className="text-muted-foreground">Waiting for another participant...</p>
-        </div>
-      )}
-      <div className="absolute bottom-24 right-6 w-48 lg:w-64 aspect-video z-20">
-        <VideoPreview
-          stream={localStream}
-          nickname={localNickname}
-          isVideoEnabled={localVideoEnabled}
-          isLocalVideo={true}
-        />
-      </div>
-    </>
-  );
-};
-
-// ====================================================================
-// Room 컴포넌트
-// ====================================================================
 const Room = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { roomTitle } = useParams<{ roomTitle: string }>();
   
-   const {
-     localStream,
-     peers,
-     isAudioEnabled,
-     isVideoEnabled,
-     isSharingScreen,
-     activePanel,
-     showControls,
-     viewMode,
-     // ====================== [ ✨ 신규 추가 ✨ ] ======================
-     unreadMessageCount,
-     // ==============================================================
-     init,
-     cleanup,
-     toggleAudio,
-     toggleVideo,
-     toggleScreenShare,
-     setActivePanel,
-     setShowControls,
-     setViewMode,
-   } = useWebRTCStore();
-
-  const nickname = useWebRTCStore(state => state.nickname);
+  // WebRTC 핵심 상태 구독
+  const { localStream, peers, isAudioEnabled, isVideoEnabled, isSharingScreen, nickname, init, cleanup, toggleAudio, toggleVideo } = useWebRTCStore();
+  
+  // UI 상태 구독
+  const { activePanel, showControls, viewMode, unreadMessageCount, setActivePanel, setViewMode } = useUIManagementStore();
+  
+  // 로비에서 가져올 스트림
   const lobbyStream = useLobbyStore((s) => s.stream);
   const { connectionDetails, mediaPreferences } = location.state || {};
   
-  const hideControlsTimeoutRef = useRef<NodeJS.Timeout>();
+  // 컨트롤 바 자동 숨김 훅 사용
+  useAutoHideControls(3000);
 
   useEffect(() => {
     if (!roomTitle || !connectionDetails || !mediaPreferences || !lobbyStream) {
@@ -153,48 +40,28 @@ const Room = () => {
 
     return () => {
       cleanup();
-      if (hideControlsTimeoutRef.current) {
-        clearTimeout(hideControlsTimeoutRef.current);
-      }
     };
   }, [roomTitle, connectionDetails, mediaPreferences, lobbyStream, init, cleanup, navigate]);
-
-  const handleMouseMove = () => {
-    setShowControls(true);
-    if (hideControlsTimeoutRef.current) {
-      clearTimeout(hideControlsTimeoutRef.current);
-    }
-    hideControlsTimeoutRef.current = setTimeout(() => {
-      setShowControls(false);
-    }, 3000);
-  };
-
-  const remotePeers = Array.from(peers.values());
-
+  
   if (!connectionDetails) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><p>Loading...</p></div>;
   }
 
   return (
-    <div className="h-screen bg-background flex flex-col relative overflow-hidden" onMouseMove={handleMouseMove}>
-      <div className="absolute top-4 left-4 z-50 flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-full border border-border/30">
-        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        <span className="text-sm font-medium">Live & Encrypted</span>
-      </div>
-
+    <div className="h-screen bg-background flex flex-col relative overflow-hidden">
       <div className="flex-1 relative">
         <VideoLayout
           viewMode={viewMode}
           localStream={localStream}
           localNickname={nickname || "You"}
           localVideoEnabled={isVideoEnabled}
-          peers={remotePeers}
+          peers={Array.from(peers.values())}
         />
       </div>
 
-      <ChatPanel isOpen={activePanel === "chat"} onClose={() => setActivePanel("none")} />
-      <WhiteboardPanel isOpen={activePanel === "whiteboard"} onClose={() => setActivePanel("none")} />
-      <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel("none")} />
+      <ChatPanel isOpen={activePanel === "chat"} onClose={() => setActivePanel("chat")} />
+      <WhiteboardPanel isOpen={activePanel === "whiteboard"} onClose={() => setActivePanel("whiteboard")} />
+      <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel("settings")} />
 
       <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
         <ControlBar
@@ -203,14 +70,12 @@ const Room = () => {
           isSharingScreen={isSharingScreen}
           activePanel={activePanel}
           viewMode={viewMode}
-          // ====================== [ ✨ props 전달 ✨ ] ======================
           unreadMessageCount={unreadMessageCount}
-          // ==============================================================
           onToggleAudio={toggleAudio}
           onToggleVideo={toggleVideo}
           onToggleChat={() => setActivePanel("chat")}
           onToggleWhiteboard={() => setActivePanel("whiteboard")}
-          onScreenShare={() => toggleScreenShare(toast)}
+          onScreenShare={() => { /* toggleScreenShare(toast) - 구현 필요 */ }}
           onOpenSettings={() => setActivePanel("settings")}
           onSetViewMode={setViewMode}
           onLeave={() => { cleanup(); navigate('/'); }}

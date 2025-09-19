@@ -15,45 +15,26 @@ const Lobby = () => {
   const location = useLocation();
 
   const {
-    connectionDetails,
-    isAudioEnabled,
-    isVideoEnabled,
-    audioLevel,
-    selectedAudioDevice,
-    selectedVideoDevice,
-    audioDevices,
-    videoDevices,
-    stream,
-    initialize,
-    toggleAudio,
-    toggleVideo,
-    setSelectedAudioDevice,
-    setSelectedVideoDevice,
-    cleanup
+    connectionDetails, isAudioEnabled, isVideoEnabled, audioLevel,
+    selectedAudioDevice, selectedVideoDevice, audioDevices, videoDevices, stream,
+    initialize, toggleAudio, toggleVideo, setSelectedAudioDevice, setSelectedVideoDevice, cleanup
   } = useLobbyStore();
 
   const joiningRef = useRef(false);
 
   const handleJoinRoom = () => {
-    const { stream, isAudioEnabled, isVideoEnabled, selectedAudioDevice, selectedVideoDevice, connectionDetails } = useLobbyStore.getState();
+    const { isAudioEnabled, isVideoEnabled, selectedAudioDevice, selectedVideoDevice, connectionDetails } = useLobbyStore.getState();
 
-    if (!stream || !connectionDetails) {
-        toast.error("Media stream or connection details are not available.");
+    if (!connectionDetails) {
+        toast.error("Connection details are not available.");
         return;
     }
     
     joiningRef.current = true;
     
-    // 변경점: navigate의 state에서 stream 객체를 제거합니다.
-    // MediaStream은 복제할 수 없으므로 라우터 state로 전달할 수 없습니다.
-    // Room 컴포넌트에서 useLobbyStore를 통해 직접 참조할 것입니다.
     navigate(`/room/${encodeURIComponent(connectionDetails.roomTitle)}`, {
         state: {
-            // stream: stream, // <--- 이 부분을 제거!
-            connectionDetails: {
-                ...connectionDetails,
-                userId: nanoid(),
-            },
+            connectionDetails: { ...connectionDetails, userId: nanoid() },
             mediaPreferences: {
                 audioEnabled: isAudioEnabled,
                 videoEnabled: isVideoEnabled,
@@ -68,13 +49,11 @@ const Lobby = () => {
 
   useEffect(() => {
     const initialNickname = location.state?.nickname || '';
-
     if (!roomTitle) {
       toast.error("No room specified. Redirecting to home.");
       navigate('/');
       return;
     }
-
     initialize(roomTitle, initialNickname, navigate, toast);
 
     return () => {
@@ -84,6 +63,17 @@ const Lobby = () => {
     };
   }, [roomTitle, location.state, navigate, initialize, cleanup]);
 
+  const handleAudioDeviceChange = (deviceId: string) => {
+    setSelectedAudioDevice(deviceId);
+    const device = audioDevices.find(d => d.deviceId === deviceId);
+    toast.success(`Switched to ${device?.label || "new microphone"}`);
+  };
+
+  const handleVideoDeviceChange = (deviceId: string) => {
+    setSelectedVideoDevice(deviceId);
+    const device = videoDevices.find(d => d.deviceId === deviceId);
+    toast.success(`Switched to ${device?.label || "new camera"}`);
+  };
 
   if (!connectionDetails) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><p>Loading room...</p></div>;
@@ -93,39 +83,31 @@ const Lobby = () => {
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
       <div className="max-w-4xl w-full">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">
-            Get Ready to Connect
-          </h1>
+          <h1 className="text-3xl font-bold text-foreground mb-2">Get Ready to Connect</h1>
           <p className="text-muted-foreground">
             Joining <span className="text-primary font-medium">"{connectionDetails.roomTitle}"</span> as{" "}
             <span className="text-accent font-medium">{connectionDetails.nickname || '...'}</span>
           </p>
         </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2">
             <VideoPreview
               stream={stream}
               isVideoEnabled={isVideoEnabled}
               nickname={connectionDetails.nickname || "You"}
+              isLocalVideo={true}
             />
           </div>
-
           <div className="space-y-6">
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Voice Check</h3>
               <div className="h-16 flex items-center justify-center">
-                <VoiceVisualizer
-                  audioLevel={audioLevel}
-                  isActive={isAudioEnabled}
-                  size="large"
-                />
+                <VoiceVisualizer audioLevel={audioLevel} isActive={isAudioEnabled} size="large" />
               </div>
               {isAudioEnabled && audioLevel > 0.1 && (
                 <p className="text-success text-sm mt-2"> Your voice sounds clear!</p>
               )}
             </div>
-
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Devices</h3>
               <DeviceSelector
@@ -133,40 +115,25 @@ const Lobby = () => {
                 videoDevices={videoDevices}
                 selectedAudioDevice={selectedAudioDevice}
                 selectedVideoDevice={selectedVideoDevice}
-                onAudioDeviceChange={setSelectedAudioDevice}
-                onVideoDeviceChange={setSelectedVideoDevice}
+                onAudioDeviceChange={handleAudioDeviceChange}
+                onVideoDeviceChange={handleVideoDeviceChange}
               />
             </div>
-
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Controls</h3>
               <div className="flex gap-3">
-                <Button
-                  variant={isAudioEnabled ? "default" : "destructive"}
-                  size="lg"
-                  onClick={() => toggleAudio()}
-                  className="flex-1"
-                >
+                <Button variant={isAudioEnabled ? "default" : "destructive"} size="lg" onClick={toggleAudio} className="flex-1">
                   {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
                 </Button>
-                <Button
-                  variant={isVideoEnabled ? "default" : "destructive"}
-                  size="lg"
-                  onClick={() => toggleVideo(toast)}
-                  className="flex-1"
-                >
+                <Button variant={isVideoEnabled ? "default" : "destructive"} size="lg" onClick={() => toggleVideo(toast)} className="flex-1">
                   {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
                 </Button>
               </div>
             </div>
           </div>
         </div>
-
         <div className="text-center mt-8">
-          <Button
-            onClick={handleJoinRoom}
-            className="btn-connection px-12 py-4 text-lg"
-          >
+          <Button onClick={handleJoinRoom} className="btn-connection px-12 py-4 text-lg">
             Join Conversation
           </Button>
         </div>

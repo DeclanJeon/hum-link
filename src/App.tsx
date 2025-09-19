@@ -8,22 +8,22 @@ import Landing from "./pages/Landing";
 import Lobby from "./pages/Lobby";
 import Room from "./pages/Room";
 import NotFound from "./pages/NotFound";
+import { GlobalConnectionStatus } from "./components/GlobalConnectionStatus";
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
+      <GlobalConnectionStatus />
       <Toaster />
       <Sonner />
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Landing />} />
-          {/* 변경: Lobby와 Room 라우트를 동적 파라미터를 받도록 수정 */}
           <Route path="/lobby" element={<Lobby />} />
           <Route path="/lobby/:roomTitle" element={<Lobby />} />
           <Route path="/room/:roomTitle" element={<Room />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

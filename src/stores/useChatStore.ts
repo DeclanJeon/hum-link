@@ -1,91 +1,49 @@
 import { create } from 'zustand';
+import { produce } from 'immer';
 
-export interface Message {
+export interface ChatMessage {
   id: string;
   text: string;
-  sender: string;
-  timestamp: Date;
-  isOwn: boolean;
+  senderId: string;
+  senderNickname: string;
+  timestamp: number;
 }
 
 interface ChatState {
-  messages: Message[];
-  newMessage: string;
+  chatMessages: ChatMessage[];
+  isTyping: Map<string, string>; // userId -> nickname
 }
 
 interface ChatActions {
-  setNewMessage: (message: string) => void;
-  sendMessage: () => void;
-  addToWhiteboard: (message: Message, toast: any) => void;
-  reset: () => void;
+  addMessage: (message: ChatMessage) => void;
+  setTypingState: (userId: string, nickname: string, isTyping: boolean) => void;
+  clearChat: () => void;
 }
 
-const initialMessages: Message[] = [
-  {
-    id: "1",
-    text: "Hey! Great to connect with you here.",
-    sender: "Remote Participant",
-    timestamp: new Date(Date.now() - 300000),
-    isOwn: false
-  },
-  {
-    id: "2", 
-    text: "Absolutely! This interface feels really smooth.",
-    sender: "You",
-    timestamp: new Date(Date.now() - 240000),
-    isOwn: true
-  }
-];
+export const useChatStore = create<ChatState & ChatActions>((set) => ({
+  chatMessages: [],
+  isTyping: new Map(),
 
-export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
-  messages: initialMessages,
-  newMessage: "",
+  addMessage: (message) =>
+    set(
+      produce((state: ChatState) => {
+        // 중복 메시지 방지
+        if (!state.chatMessages.some((msg) => msg.id === message.id)) {
+          state.chatMessages.push(message);
+        }
+      }),
+    ),
 
-  setNewMessage: (message: string) => set({ newMessage: message }),
-
-  sendMessage: () => {
-    const { newMessage, messages } = get();
-    if (!newMessage.trim()) return;
-
-    const message: Message = {
-      id: Date.now().toString(),
-      text: newMessage.trim(),
-      sender: "You",
-      timestamp: new Date(),
-      isOwn: true
-    };
-
-    set({ 
-      messages: [...messages, message],
-      newMessage: "" 
-    });
-
-    // Simulate response after a delay
-    setTimeout(() => {
-      const responses = [
-        "That's a great point!",
-        "I totally agree with that.",
-        "Let me think about that for a moment.",
-        "Interesting perspective!",
-        "Could you elaborate on that?"
-      ];
-      
-      const response: Message = {
-        id: (Date.now() + 1).toString(),
-        text: responses[Math.floor(Math.random() * responses.length)],
-        sender: "Remote Participant",
-        timestamp: new Date(),
-        isOwn: false
-      };
-      
-      set({ messages: [...get().messages, response] });
-    }, 1000 + Math.random() * 2000);
-  },
-
-  addToWhiteboard: (message: Message, toast: any) => {
-    toast.success("Message added to whiteboard!");
-    // In real implementation, this would integrate with whiteboard state
-  },
-
-  reset: () => set({ messages: initialMessages, newMessage: "" })
+  setTypingState: (userId, nickname, isTyping) =>
+    set(
+      produce((state: ChatState) => {
+        if (isTyping) {
+          state.isTyping.set(userId, nickname);
+        } else {
+          state.isTyping.delete(userId);
+        }
+      }),
+    ),
+  
+  clearChat: () => set({ chatMessages: [], isTyping: new Map() }),
 }));
