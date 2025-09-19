@@ -95,6 +95,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.83.0
         version: 5.87.4(react@18.3.1)
+      '@types/simple-peer':
+        specifier: ^9.11.8
+        version: 9.11.8
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -1349,6 +1352,9 @@ packages:
 
   '@types/react@18.3.24':
     resolution: {integrity: sha512-0dLEBsA1kI3OezMBF8nSsb7Nk19ZnsyE1LLhB8r27KbgU5H4pvuqZLdtE+aUkJVoXgTVuA+iLIwmZ0TuK4tx6A==}
+
+  '@types/simple-peer@9.11.8':
+    resolution: {integrity: sha512-rvqefdp2rvIA6wiomMgKWd2UZNPe6LM2EV5AuY3CPQJF+8TbdrL5TjYdMf0VAjGczzlkH4l1NjDkihwbj3Xodw==}
 
   '@typescript-eslint/eslint-plugin@8.43.0':
     resolution: {integrity: sha512-8tg+gt7ENL7KewsKMKDHXR1vm8tt9eMxjJBYINf6swonlWgkYn5NwyIgXpbbDxTNU5DgpDFfj95prcTq2clIQQ==}
@@ -3585,6 +3591,10 @@ snapshots:
     dependencies:
       '@types/prop-types': 15.7.15
       csstype: 3.1.3
+
+  '@types/simple-peer@9.11.8':
+    dependencies:
+      '@types/node': 22.18.3
 
   '@typescript-eslint/eslint-plugin@8.43.0(@typescript-eslint/parser@8.43.0(eslint@9.35.0(jiti@1.21.7))(typescript@5.9.2))(eslint@9.35.0(jiti@1.21.7))(typescript@5.9.2)':
     dependencies:

@@ -16,17 +16,20 @@ const Room = () => {
   const location = useLocation();
   const { roomTitle } = useParams<{ roomTitle: string }>();
   
-  // WebRTC 핵심 상태 구독
-  const { localStream, peers, isAudioEnabled, isVideoEnabled, isSharingScreen, nickname, init, cleanup, toggleAudio, toggleVideo } = useWebRTCStore();
+  // WebRTC 스토어에서 화면 공유 관련 함수를 포함한 모든 필요한 상태와 액션을 가져옵니다.
+  const { 
+    localStream, peers, isAudioEnabled, isVideoEnabled, isSharingScreen, nickname, 
+    init, cleanup, toggleAudio, toggleVideo, toggleScreenShare 
+  } = useWebRTCStore();
   
-  // UI 상태 구독
+  // UI 상태 관리
   const { activePanel, showControls, viewMode, unreadMessageCount, setActivePanel, setViewMode } = useUIManagementStore();
   
-  // 로비에서 가져올 스트림
+  // 로비에서 전달받은 상태
   const lobbyStream = useLobbyStore((s) => s.stream);
   const { connectionDetails, mediaPreferences } = location.state || {};
   
-  // 컨트롤 바 자동 숨김 훅 사용
+  // 컨트롤 바 자동 숨김 훅
   useAutoHideControls(3000);
 
   useEffect(() => {
@@ -75,7 +78,8 @@ const Room = () => {
           onToggleVideo={toggleVideo}
           onToggleChat={() => setActivePanel("chat")}
           onToggleWhiteboard={() => setActivePanel("whiteboard")}
-          onScreenShare={() => { /* toggleScreenShare(toast) - 구현 필요 */ }}
+          // 화면 공유 버튼에 실제 기능을 연결합니다.
+          onScreenShare={() => toggleScreenShare(toast)}
           onOpenSettings={() => setActivePanel("settings")}
           onSetViewMode={setViewMode}
           onLeave={() => { cleanup(); navigate('/'); }}

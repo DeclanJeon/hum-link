@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { X, Send, Paperclip } from "lucide-react"; // Paperclip 아이콘 추가
-import { useChatStore, ChatMessage } from "@/stores/useChatStore"; // ChatMessage 타입 import
+import { X, Send, Paperclip } from "lucide-react";
+import { useChatStore, ChatMessage } from "@/stores/useChatStore";
 import { useWebRTCStore } from "@/stores/useWebRTCStore";
-import { FileMessage } from "./FileMessage"; // 새로 만들 컴포넌트
+import { FileMessage } from "./FileMessage";
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -13,69 +13,79 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
-  const { chatMessages } = useChatStore();
-  const { sendChatMessage, sendFile, userId } = useWebRTCStore(); // sendFile 액션 가져오기
+  const { chatMessages, isTyping } = useChatStore();
+  const { sendChatMessage, sendFile, sendTypingState, userId } = useWebRTCStore();
   const [newMessage, setNewMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null); // 파일 입력을 위한 ref
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
 
+  const handleSendMessage = () => {
+    if (newMessage.trim()) {
+      sendChatMessage(newMessage);
+      setNewMessage("");
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      sendTypingState(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) sendFile(file);
+    if(fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleAttachClick = () => fileInputRef.current?.click();
   
-    const handleSendMessage = () => {
-      if (newMessage.trim()) {
-        sendChatMessage(newMessage);
-        setNewMessage("");
-      }
-    };
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewMessage(e.target.value);
     
-    // ====================== [ 파일 공유 기능 추가 ] ======================
-    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-        sendFile(file);
-      }
-      // 같은 파일을 다시 선택할 수 있도록 value를 초기화합니다.
-      if(fileInputRef.current) fileInputRef.current.value = "";
-    };
-  
-    const handleAttachClick = () => {
-      fileInputRef.current?.click();
-    };
-    // =================================================================
-  
-    const handleKeyPress = (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSendMessage();
-      }
-    };
+    // 타이핑 상태 전송 로직
+    if (!typingTimeoutRef.current) {
+      sendTypingState(true);
+    } else {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    typingTimeoutRef.current = setTimeout(() => {
+      sendTypingState(false);
+      typingTimeoutRef.current = null;
+    }, 2000); // 2초 후 타이핑 중지 전송
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  // "입력 중"인 사용자 닉네임 목록을 생성합니다.
+  const typingUsers = useMemo(() => Array.from(isTyping.values()), [isTyping]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed right-0 top-0 h-full w-80 bg-card/95 backdrop-blur-xl border-l border-border/50 shadow-[var(--shadow-elegant)] z-40">
+    <div className="fixed right-0 top-0 h-full w-80 bg-card/95 backdrop-blur-xl border-l border-border/50 shadow-[var(--shadow-elegant)] z-40 flex flex-col">
       <div className="flex items-center justify-between p-4 border-b border-border/30">
         <h3 className="font-semibold text-foreground">Chat</h3>
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          <X className="w-4 h-4" />
-        </Button>
+        <Button variant="ghost" size="sm" onClick={onClose}><X className="w-4 h-4" /></Button>
       </div>
 
-      <ScrollArea className="flex-1 h-[calc(100vh-120px)]">
+      <ScrollArea className="flex-1">
         <div className="p-4 space-y-4">
-          {chatMessages.map((message: ChatMessage) => ( // 타입 명시
-            <div
-              key={message.id}
-              className={`flex ${message.senderId === userId ? "justify-end" : "justify-start"}`}
-            >
+          {chatMessages.map((message: ChatMessage) => (
+            <div key={message.id} className={`flex ${message.senderId === userId ? "justify-end" : "justify-start"}`}>
               {message.type === 'file' && message.fileMeta ? (
                 <FileMessage message={message} />
               ) : (
                 <div className="max-w-[85%] space-y-1">
                   <div className={`chat-bubble ${message.senderId === userId ? "own" : ""}`}>
-                    <p className="text-sm">{message.text}</p>
+                    <p className="text-sm whitespace-pre-wrap break-words">{message.text}</p>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span>{message.senderNickname}</span>
@@ -88,25 +98,26 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
+      
+      {/* 타이핑 인디케이터 UI */}
+      <div className="h-6 px-4 text-xs text-muted-foreground italic transition-opacity duration-300">
+        {typingUsers.length > 0 && (
+          <p>{typingUsers.join(', ')} {typingUsers.length > 1 ? 'are' : 'is'} typing...</p>
+        )}
+      </div>
 
       <div className="p-4 border-t border-border/30">
         <div className="flex gap-2">
-          {/* ====================== [ 파일 공유 기능 추가 ] ====================== */}
           <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
-          <Button variant="ghost" size="sm" onClick={handleAttachClick} className="px-3">
-            <Paperclip className="w-4 h-4" />
-          </Button>
-          {/* ================================================================= */}
+          <Button variant="ghost" size="sm" onClick={handleAttachClick} className="px-3"><Paperclip className="w-4 h-4" /></Button>
           <Input
             value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
+            onChange={handleInputChange}
             onKeyPress={handleKeyPress}
             placeholder="Type a message..."
             className="flex-1 bg-input/50 border-border/50"
           />
-          <Button onClick={handleSendMessage} disabled={!newMessage.trim()} size="sm" className="px-3">
-            <Send className="w-4 h-4" />
-          </Button>
+          <Button onClick={handleSendMessage} disabled={!newMessage.trim()} size="sm" className="px-3"><Send className="w-4 h-4" /></Button>
         </div>
       </div>
     </div>

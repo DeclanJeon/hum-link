@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useWebRTCStore } from './useWebRTCStore';
 
 type Tool = "pen" | "square" | "circle" | "eraser";
 
@@ -10,20 +11,22 @@ interface WhiteboardState {
 }
 
 interface WhiteboardActions {
-  setIsDrawing: (drawing: boolean) => void;
-  setCurrentTool: (tool: Tool) => void;
-  setStartPos: (pos: { x: number; y: number }) => void;
-  setContext: (context: CanvasRenderingContext2D | null) => void;
   initializeCanvas: (canvas: HTMLCanvasElement) => void;
-  getMousePos: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => { x: number; y: number };
-  startDrawing: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => void;
-  draw: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => void;
-  stopDrawing: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => void;
-  clearCanvas: (toast: any) => void;
-  downloadCanvas: (canvas: HTMLCanvasElement, toast: any) => void;
+  startDrawing: (e: React.MouseEvent<HTMLCanvasElement>) => void;
+  draw: (e: React.MouseEvent<HTMLCanvasElement>) => void;
+  stopDrawing: (e: React.MouseEvent<HTMLCanvasElement>) => void;
   handleDrop: (e: React.DragEvent, toast: any) => void;
+  clearCanvas: (toast: any) => void;
+  downloadCanvas: (toast: any) => void;
+  setCurrentTool: (tool: Tool) => void;
+  applyRemoteDrawEvent: (event: any) => void;
   reset: () => void;
 }
+
+// 그리기 이벤트 데이터를 전송하는 헬퍼 함수
+const sendDrawEvent = (event: any) => {
+  useWebRTCStore.getState().sendWhiteboardData(event);
+};
 
 export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>((set, get) => ({
   isDrawing: false,
@@ -31,127 +34,132 @@ export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>((s
   startPos: { x: 0, y: 0 },
   context: null,
 
-  setIsDrawing: (drawing: boolean) => set({ isDrawing: drawing }),
-  
-  setCurrentTool: (tool: Tool) => set({ currentTool: tool }),
-  
-  setStartPos: (pos: { x: number; y: number }) => set({ startPos: pos }),
-  
-  setContext: (context: CanvasRenderingContext2D | null) => set({ context }),
-
   initializeCanvas: (canvas: HTMLCanvasElement) => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
-
     ctx.strokeStyle = "hsl(var(--primary))";
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-
     set({ context: ctx });
-
-    ctx.font = "16px Inter";
-    ctx.fillStyle = "hsl(var(--muted-foreground))";
-    ctx.fillText("Drag files here or start drawing...", 20, 40);
   },
 
-  getMousePos: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
-    };
-  },
+  setCurrentTool: (tool: Tool) => set({ currentTool: tool }),
 
-  startDrawing: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => {
-    const { currentTool, context } = get();
-    const pos = get().getMousePos(e, canvas);
-    
+  startDrawing: (e) => {
+    const { context } = get();
+    if (!context) return;
+    const pos = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
     set({ isDrawing: true, startPos: pos });
 
-    if (currentTool === "pen" && context) {
-      context.beginPath();
-      context.moveTo(pos.x, pos.y);
-    }
+    const event = { type: 'start', tool: get().currentTool, pos };
+    get().applyRemoteDrawEvent(event); // 로컬에도 즉시 적용
+    sendDrawEvent(event); // 다른 피어에게 전송
   },
 
-  draw: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => {
-    const { isDrawing, currentTool, context } = get();
-    if (!isDrawing || !context) return;
-
-    const pos = get().getMousePos(e, canvas);
-
-    switch (currentTool) {
-      case "pen":
-        context.lineTo(pos.x, pos.y);
-        context.stroke();
-        break;
-      case "eraser":
-        context.globalCompositeOperation = "destination-out";
-        context.beginPath();
-        context.arc(pos.x, pos.y, 10, 0, 2 * Math.PI);
-        context.fill();
-        context.globalCompositeOperation = "source-over";
-        break;
-    }
+  draw: (e) => {
+    if (!get().isDrawing) return;
+    const pos = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
+    
+    const event = { type: 'draw', tool: get().currentTool, pos };
+    get().applyRemoteDrawEvent(event);
+    sendDrawEvent(event);
   },
 
-  stopDrawing: (e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) => {
-    const { isDrawing, currentTool, context, startPos } = get();
-    if (!isDrawing || !context) return;
-
-    const pos = get().getMousePos(e, canvas);
-
-    switch (currentTool) {
-      case "square":
-        const width = pos.x - startPos.x;
-        const height = pos.y - startPos.y;
-        context.strokeRect(startPos.x, startPos.y, width, height);
-        break;
-      case "circle":
-        const radius = Math.sqrt(
-          Math.pow(pos.x - startPos.x, 2) + Math.pow(pos.y - startPos.y, 2)
-        );
-        context.beginPath();
-        context.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
-        context.stroke();
-        break;
-    }
-
+  stopDrawing: (e) => {
+    if (!get().isDrawing) return;
+    const pos = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
+    
+    const event = { type: 'stop', tool: get().currentTool, startPos: get().startPos, endPos: pos };
+    get().applyRemoteDrawEvent(event);
+    sendDrawEvent(event);
     set({ isDrawing: false });
-  },
-
-  clearCanvas: (toast: any) => {
-    const { context } = get();
-    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-    
-    if (!context || !canvas) return;
-    
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    toast.success("Whiteboard cleared");
-  },
-
-  downloadCanvas: (canvas: HTMLCanvasElement, toast: any) => {
-    const link = document.createElement("a");
-    link.download = "whiteboard.png";
-    link.href = canvas.toDataURL();
-    link.click();
-    
-    toast.success("Whiteboard downloaded");
   },
 
   handleDrop: (e: React.DragEvent, toast: any) => {
     e.preventDefault();
-    toast.success("File drop feature coming soon!");
+    const { context } = get();
+    if (!context) return;
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const pos = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
+          const drawEvent = { type: 'image', src: img.src, pos };
+          get().applyRemoteDrawEvent(drawEvent);
+          sendDrawEvent(drawEvent);
+          toast.success("Image added to whiteboard!");
+        };
+        img.src = event.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    } else {
+      toast.warning("Only image files can be dropped on the whiteboard.");
+    }
   },
 
-  reset: () => set({ 
-    isDrawing: false, 
-    currentTool: "pen", 
-    startPos: { x: 0, y: 0 }, 
-    context: null 
-  })
+  clearCanvas: (toast: any) => {
+    const event = { type: 'clear' };
+    get().applyRemoteDrawEvent(event);
+    sendDrawEvent(event);
+    toast.success("Whiteboard cleared");
+  },
+
+  downloadCanvas: (toast: any) => {
+    const canvas = get().context?.canvas;
+    if (!canvas) return;
+    const link = document.createElement("a");
+    link.download = "singularity-whiteboard.png";
+    link.href = canvas.toDataURL();
+    link.click();
+    toast.success("Whiteboard downloaded");
+  },
+
+  applyRemoteDrawEvent: (event: any) => {
+    const { context, startPos } = get();
+    if (!context) return;
+
+    switch (event.type) {
+      case 'start':
+        context.beginPath();
+        context.moveTo(event.pos.x, event.pos.y);
+        break;
+      case 'draw':
+        if (event.tool === "pen") {
+          context.lineTo(event.pos.x, event.pos.y);
+          context.stroke();
+        } else if (event.tool === "eraser") {
+          context.globalCompositeOperation = "destination-out";
+          context.beginPath();
+          context.arc(event.pos.x, event.pos.y, 10, 0, 2 * Math.PI);
+          context.fill();
+          context.globalCompositeOperation = "source-over";
+        }
+        break;
+      case 'stop':
+        context.beginPath(); // 이전 경로와 분리
+        if (event.tool === "square") {
+          context.strokeRect(event.startPos.x, event.startPos.y, event.endPos.x - event.startPos.x, event.endPos.y - event.startPos.y);
+        } else if (event.tool === "circle") {
+          const radius = Math.sqrt(Math.pow(event.endPos.x - event.startPos.x, 2) + Math.pow(event.endPos.y - event.startPos.y, 2));
+          context.arc(event.startPos.x, event.startPos.y, radius, 0, 2 * Math.PI);
+          context.stroke();
+        }
+        break;
+      case 'image':
+        const img = new Image();
+        img.onload = () => context.drawImage(img, event.pos.x, event.pos.y);
+        img.src = event.src;
+        break;
+      case 'clear':
+        context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+        break;
+    }
+  },
+
+  reset: () => set({ isDrawing: false, currentTool: "pen", startPos: { x: 0, y: 0 }, context: null })
 }));

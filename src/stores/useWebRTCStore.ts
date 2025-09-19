@@ -2,12 +2,12 @@ import { create } from 'zustand';
 import { produce } from 'immer';
 import { SignalingClient } from '@/services/signaling';
 import { WebRTCManager } from '@/services/webrtc';
-import { useChatStore, ChatMessage } from './useChatStore';
+import { useChatStore, ChatMessage, FileMetadata } from './useChatStore';
 import { useUIManagementStore } from './useUIManagementStore';
 import { ENV } from '@/config';
-import { nanoid } from 'nanoid'; // nanoid import
+import { nanoid } from 'nanoid';
 
-// Peer의 상세 상태를 정의합니다.
+// Peer의 상태를 정의합니다.
 export interface PeerState {
   userId: string;
   nickname: string;
@@ -18,44 +18,27 @@ export interface PeerState {
   connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
 }
 
-
-// Peer의 상세 상태를 정의합니다.
-export interface PeerState {
-  userId: string;
-  nickname: string;
-  stream?: MediaStream;
-  audioEnabled: boolean;
-  videoEnabled: boolean;
-  isSharingScreen: boolean;
-  connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
-}
-
-// ====================== [ 파일 공유 기능 추가 ] ======================
-// 파일 메타데이터 타입 정의
-interface FileMetadata {
-  transferId: string;
-  name: string;
-  size: number;
-  type: string;
-}
-
-// 데이터 채널을 통해 전달되는 메시지 타입을 정의합니다.
+// DataChannel을 통해 전송될 메시지 타입을 정의합니다.
+// 파일 청크, 화이트보드 이벤트 등 모든 실시간 데이터를 구조화하여 안정성을 높입니다.
 type DataChannelMessage =
   | { type: 'chat'; payload: ChatMessage }
   | { type: 'typing-state'; payload: { isTyping: boolean } }
-  | { type: 'file-meta'; payload: FileMetadata };
+  | { type: 'whiteboard-event'; payload: any } // 화이트보드 데이터
+  | { type: 'file-meta'; payload: FileMetadata }
+  | { type: 'file-chunk'; payload: { transferId: string; chunk: number[]; isLast: boolean } }; // 청크를 숫자 배열로 변환하여 전송
 
-// 타입 가드 함수
+// 수신된 객체가 DataChannelMessage 타입인지 확인하는 타입 가드
 function isDataChannelMessage(obj: any): obj is DataChannelMessage {
     return obj && typeof obj.type === 'string' && 'payload' in obj;
 }
-// =================================================================
-// WebRTC 핵심 상태
+
+// WebRTC 상태 인터페이스
 interface WebRTCState {
   roomId: string | null;
   userId: string | null;
   nickname: string | null;
   localStream: MediaStream | null;
+  originalVideoTrack: MediaStreamTrack | null; // 화면 공유 이전의 비디오 트랙을 저장
   signalingClient: SignalingClient | null;
   webRTCManager: WebRTCManager | null;
   peers: Map<string, PeerState>;
@@ -63,16 +46,20 @@ interface WebRTCState {
   isAudioEnabled: boolean;
   isVideoEnabled: boolean;
   isSharingScreen: boolean;
+  preShareVideoState: boolean | null; // [개선] 공유 시작 전 비디오 상태 저장
 }
 
-// WebRTC 관련 액션
+// WebRTC 액션 인터페이스
 interface WebRTCActions {
   init: (roomId: string, userId: string, nickname: string, localStream: MediaStream) => void;
   cleanup: () => void;
   toggleAudio: () => void;
   toggleVideo: () => void;
+  toggleScreenShare: (toast: any) => Promise<void>;
   sendChatMessage: (text: string) => void;
-  sendFile: (file: File) => void; // 파일 전송 액션 추가
+  sendTypingState: (isTyping: boolean) => void;
+  sendWhiteboardData: (data: any) => void;
+  sendFile: (file: File) => void;
 }
 
 export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => ({
@@ -81,6 +68,7 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
   userId: null,
   nickname: null,
   localStream: null,
+  originalVideoTrack: null,
   signalingClient: null,
   webRTCManager: null,
   peers: new Map(),
@@ -88,6 +76,7 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
   isAudioEnabled: true,
   isVideoEnabled: true,
   isSharingScreen: false,
+  preShareVideoState: null, // [개선] 초기값 설정
 
   // 초기화 함수
   init: (roomId, userId, nickname, localStream) => {
@@ -107,12 +96,8 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
         }));
       },
       onData: (peerId, data) => {
-        // ✅ 데이터 처리 로직 개선
-        // simple-peer는 Buffer를 전달하므로 toString()으로 변환
-        const dataString = data.toString();
-        
         try {
-          const parsedData = JSON.parse(dataString);
+          const parsedData = JSON.parse(data.toString());
           if (!isDataChannelMessage(parsedData)) return;
 
           const sender = get().peers.get(peerId);
@@ -130,40 +115,25 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
                 useChatStore.getState().setTypingState(peerId, sender.nickname, parsedData.payload.isTyping);
               }
               break;
+            case 'whiteboard-event':
+              // 화이트보드 스토어에 원격 드로우 이벤트를 적용합니다.
+              useChatStore.getState().applyRemoteDrawEvent(parsedData.payload);
+              break;
             case 'file-meta':
               useChatStore.getState().addFileMessage(peerId, senderNickname, parsedData.payload);
               break;
+            case 'file-chunk':
+              // 구조화된 청크 데이터를 처리합니다.
+              const { transferId, chunk, isLast } = parsedData.payload;
+              const buffer = new Uint8Array(chunk).buffer;
+              useChatStore.getState().appendFileChunk(transferId, buffer, isLast);
+              break;
           }
         } catch (e) {
-            // JSON 파싱 실패 시 바이너리 데이터(파일 청크)로 간주
-            // 이 방식은 transferId를 알 수 없다는 문제가 있습니다.
-            // 더 나은 방법은 바이너리 데이터 앞에 헤더(e.g., transferId)를 붙이는 것입니다.
-            // 여기서는 임시로 마지막 파일 전송 ID를 사용한다고 가정합니다.
-            console.warn("Received binary data, assuming it's a file chunk. This part needs a more robust implementation.", e);
-            
-            // [추론] 이 로직은 여러 파일이 동시에 전송될 때 문제가 될 수 있습니다.
-            // 간단한 해결을 위해 가장 최근에 시작된 수신 파일의 ID를 찾습니다.
-            const transfers = useChatStore.getState().fileTransfers;
-            let targetTransferId: string | undefined;
-            for (const [id, transfer] of transfers.entries()) {
-                if (transfer.isReceiving && !transfer.isComplete) {
-                    targetTransferId = id;
-                    break;
-                }
-            }
-
-            if (targetTransferId) {
-                // 마지막 청크인지 판단하는 로직이 필요합니다.
-                // 여기서는 임시로 데이터 크기가 chunkSize보다 작으면 마지막으로 간주합니다.
-                const chunkSize = 16 * 1024;
-                const isLast = data.byteLength < chunkSize;
-                useChatStore.getState().appendFileChunk(targetTransferId, data, isLast);
-            }
+            console.error("Failed to process DataChannel message:", e);
         }
       },
-      onClose: (peerId) => {
-        set(produce(state => { state.peers.delete(peerId); }));
-      },
+      onClose: (peerId) => set(produce(state => { state.peers.delete(peerId); })),
       onError: (peerId, error) => {
         console.error(`[WebRTC] Error with peer ${peerId}:`, error);
         set(produce(state => { 
@@ -181,70 +151,42 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
           if (user.id !== get().userId) {
             get().webRTCManager?.createPeer(user.id);
             set(produce(state => {
-              state.peers.set(user.id, {
-                userId: user.id,
-                nickname: user.nickname,
-                audioEnabled: true,
-                videoEnabled: true,
-                isSharingScreen: false,
-                connectionState: 'connecting',
-              });
+              state.peers.set(user.id, { userId: user.id, nickname: user.nickname, audioEnabled: true, videoEnabled: true, isSharingScreen: false, connectionState: 'connecting' });
             }));
           }
         });
       },
-      onUserJoined: (user) => {
-        set(produce(state => {
-          state.peers.set(user.id, {
-            userId: user.id,
-            nickname: user.nickname,
-            audioEnabled: true,
-            videoEnabled: true,
-            isSharingScreen: false,
-            connectionState: 'connecting',
-          });
-        }));
-      },
+      onUserJoined: (user) => set(produce(state => { state.peers.set(user.id, { userId: user.id, nickname: user.nickname, audioEnabled: true, videoEnabled: true, isSharingScreen: false, connectionState: 'connecting' }); })),
       onUserLeft: (userId) => {
         get().webRTCManager?.removePeer(userId);
         set(produce(state => { state.peers.delete(userId); }));
       },
       onSignal: ({ from, signal }) => {
-        const webRTCManager = get().webRTCManager;
-        webRTCManager?.hasPeer(from) ? webRTCManager.signalPeer(from, signal) : webRTCManager?.receiveSignal(from, signal);
+        const rtcManager = get().webRTCManager;
+        rtcManager?.hasPeer(from) ? rtcManager.signalPeer(from, signal) : rtcManager?.receiveSignal(from, signal);
       },
-      onMediaState: ({ userId, kind, enabled }) => {
-        set(produce(state => {
-          const peer = state.peers.get(userId);
-          if (peer) {
-            peer[kind === 'audio' ? 'audioEnabled' : 'videoEnabled'] = enabled;
-          }
-        }));
-      },
-      onChatMessage: (message: ChatMessage) => {
-        useChatStore.getState().addMessage(message);
-        if (useUIManagementStore.getState().activePanel !== 'chat') {
-            useUIManagementStore.getState().incrementUnreadMessageCount();
+      onMediaState: ({ userId, kind, enabled }) => set(produce(state => {
+        const peer = state.peers.get(userId);
+        if (peer) {
+          if (kind === 'audio') peer.audioEnabled = enabled;
+          else if (kind === 'video') peer.videoEnabled = enabled;
         }
-      }
+      })),
+      onChatMessage: (message) => { /* DataChannel fallback - 현재는 사용하지 않음 */ },
     });
 
     signalingClient.connect(ENV.VITE_SIGNALING_SERVER_URL, userId, nickname, roomId);
     set({ roomId, userId, nickname, localStream, webRTCManager, signalingClient, isAudioEnabled: localStream.getAudioTracks()[0]?.enabled ?? false, isVideoEnabled: localStream.getVideoTracks()[0]?.enabled ?? false });
   },
 
-  // 정리 함수
   cleanup: () => {
     get().webRTCManager?.destroyAll();
     get().signalingClient?.disconnect();
     get().localStream?.getTracks().forEach(track => track.stop());
+    get().originalVideoTrack?.stop(); // 저장된 비디오 트랙도 정리
     useChatStore.getState().clearChat();
     useUIManagementStore.getState().resetUnreadMessageCount();
-    set({
-      roomId: null, userId: null, nickname: null, localStream: null,
-      webRTCManager: null, signalingClient: null, peers: new Map(),
-      signalingStatus: 'disconnected'
-    });
+    set({ roomId: null, userId: null, nickname: null, localStream: null, originalVideoTrack: null, webRTCManager: null, signalingClient: null, peers: new Map(), signalingStatus: 'disconnected' });
   },
 
   toggleAudio: () => {
@@ -263,87 +205,133 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
     set({ isVideoEnabled: enabled });
   },
 
-  sendChatMessage: (text: string) => {
-    const { userId, nickname, webRTCManager, signalingClient } = get();
-    if (!userId || !nickname) return;
-    
-    const message: ChatMessage = {
-      id: `${userId}-${Date.now()}`,
-      type: 'text',
-      text,
-      senderId: userId,
-      senderNickname: nickname,
-      timestamp: Date.now(),
-    };
+  toggleScreenShare: async (toast: any) => {
+    const { isSharingScreen, webRTCManager, localStream, originalVideoTrack, isVideoEnabled, preShareVideoState } = get();
 
-    // 로컬 상태에 즉시 반영
-    useChatStore.getState().addMessage(message);
-    
-    const dataChannelMessage: DataChannelMessage = { type: 'chat', payload: message };
+    if (isSharingScreen) {
+      // --- 화면 공유 중지 로직 ---
+      if (originalVideoTrack && localStream) {
+        const screenTrack = localStream.getVideoTracks()[0];
+        
+        // [개선] 원격 피어와 로컬 스트림 모두 원래 트랙으로 복원
+        webRTCManager?.replaceTrack(screenTrack, originalVideoTrack);
+        localStream.removeTrack(screenTrack);
+        localStream.addTrack(originalVideoTrack);
+        screenTrack.stop();
 
-    // 데이터 채널을 통해 전송 시도
-    const sentCount = webRTCManager?.sendToAllPeers(JSON.stringify(dataChannelMessage)) ?? 0;
+        // [개선] 공유 시작 전 비디오 상태로 복원. null이면 false로 간주.
+        const wasVideoEnabledBeforeShare = preShareVideoState ?? false;
+        originalVideoTrack.enabled = wasVideoEnabledBeforeShare;
 
-    // 데이터 채널로 보낼 수 없는 경우 시그널링 서버로 폴백
-    if (sentCount === 0) {
-      console.log("Data Channel not available. Falling back to Socket.IO.");
-      signalingClient?.sendChatMessage(message);
+        set({
+          isSharingScreen: false,
+          originalVideoTrack: null,
+          isVideoEnabled: wasVideoEnabledBeforeShare, // [개선] 저장된 상태로 설정
+          preShareVideoState: null, // [개선] 상태 초기화
+        });
+        
+        // [개선] 복원된 실제 상태를 다른 참여자에게 알림
+        get().signalingClient?.updateMediaState('video', wasVideoEnabledBeforeShare);
+        toast.info("Screen sharing has ended.");
+      }
+    } else {
+      // --- 화면 공유 시작 로직 ---
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const screenTrack = screenStream.getVideoTracks()[0];
+        
+        if (localStream && webRTCManager) {
+          const currentVideoTrack = localStream.getVideoTracks()[0];
+          
+          // [개선] 공유 시작 전 상태 저장
+          set({
+            originalVideoTrack: currentVideoTrack,
+            preShareVideoState: isVideoEnabled
+          });
+
+          // [개선] 원격 피어와 로컬 스트림 모두 화면 공유 트랙으로 교체
+          webRTCManager.replaceTrack(currentVideoTrack, screenTrack);
+          localStream.removeTrack(currentVideoTrack);
+          localStream.addTrack(screenTrack);
+          
+          set({ isSharingScreen: true, isVideoEnabled: true });
+          get().signalingClient?.updateMediaState('video', true); // 공유 시작 시에는 항상 비디오 on
+          
+          // 사용자가 브라우저 UI로 공유를 중지했을 때 처리
+          screenTrack.onended = () => {
+            // isSharingScreen 상태를 다시 확인하여 중복 실행 방지
+            if (get().isSharingScreen) {
+              get().toggleScreenShare(toast);
+            }
+          };
+          
+          toast.success("Started screen sharing.");
+        }
+      } catch (error) {
+        console.error("Screen share error:", error);
+        toast.error("Could not start screen sharing. Permission may have been denied.");
+      }
     }
   },
-  
-  // ====================== [ 파일 공유 기능 추가 ] ======================
+
+  sendChatMessage: (text: string) => {
+    const { userId, nickname, webRTCManager } = get();
+    if (!userId || !nickname || !webRTCManager) return;
+    
+    const message: ChatMessage = { id: nanoid(), type: 'text', text, senderId: userId, senderNickname: nickname, timestamp: Date.now() };
+    useChatStore.getState().addMessage(message);
+    const data: DataChannelMessage = { type: 'chat', payload: message };
+    webRTCManager.sendToAllPeers(JSON.stringify(data));
+  },
+
+  sendTypingState: (isTyping: boolean) => {
+    const data: DataChannelMessage = { type: 'typing-state', payload: { isTyping } };
+    get().webRTCManager?.sendToAllPeers(JSON.stringify(data));
+  },
+
+  sendWhiteboardData: (eventData: any) => {
+    const data: DataChannelMessage = { type: 'whiteboard-event', payload: eventData };
+    get().webRTCManager?.sendToAllPeers(JSON.stringify(data));
+  },
+
   sendFile: (file: File) => {
     const { userId, nickname, webRTCManager } = get();
     if (!userId || !nickname || !webRTCManager) return;
 
     const transferId = nanoid();
-    const fileMeta: FileMetadata = {
-      transferId,
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    };
+    const fileMeta: FileMetadata = { transferId, name: file.name, size: file.size, type: file.type };
     
-    // 1. UI에 파일 메시지를 먼저 추가 (로컬 사용자 경험 향상)
     useChatStore.getState().addFileMessage(userId, nickname, fileMeta, true);
-
-    // 2. 다른 피어에게 파일 전송 시작을 알림
+    
     const metaMessage: DataChannelMessage = { type: 'file-meta', payload: fileMeta };
     webRTCManager.sendToAllPeers(JSON.stringify(metaMessage));
     
-    // 3. 파일을 청크로 나누어 전송
     const chunkSize = 16 * 1024; // 16KB
     let offset = 0;
-    const fileReader = new FileReader();
+    const reader = new FileReader();
 
-    fileReader.onload = (e) => {
-        if (!e.target?.result) return;
-        const chunk = e.target.result as ArrayBuffer;
-        
-        // [수정] 바이너리 데이터 앞에 transferId를 헤더로 붙여서 전송
-        const header = new TextEncoder().encode(`${transferId}:`);
-        const combined = new Uint8Array(header.length + chunk.byteLength);
-        combined.set(header, 0);
-        combined.set(new Uint8Array(chunk), header.length);
-        
-        webRTCManager.sendToAllPeers(combined.buffer);
+    reader.onload = (e) => {
+      if (!e.target?.result) return;
+      const chunk = e.target.result as ArrayBuffer;
+      
+      const chunkMessage: DataChannelMessage = {
+        type: 'file-chunk',
+        payload: {
+          transferId,
+          chunk: Array.from(new Uint8Array(chunk)), // ArrayBuffer를 숫자 배열로 변환
+          isLast: offset + chunk.byteLength >= file.size,
+        },
+      };
+      webRTCManager.sendToAllPeers(JSON.stringify(chunkMessage));
 
-        offset += chunk.byteLength;
-        useChatStore.getState().updateFileProgress(transferId, offset);
-        
-        if (offset < file.size) {
-            readSlice(offset);
-        } else {
-            console.log(`File ${file.name} sent successfully.`);
-        }
+      offset += chunk.byteLength;
+      useChatStore.getState().updateFileProgress(transferId, offset);
+      
+      if (offset < file.size) {
+        readSlice(offset);
+      }
     };
-
-    const readSlice = (currentOffset: number) => {
-        const slice = file.slice(currentOffset, currentOffset + chunkSize);
-        fileReader.readAsArrayBuffer(slice);
-    };
-
+    const readSlice = (o: number) => reader.readAsArrayBuffer(file.slice(o, o + chunkSize));
     readSlice(0);
   },
-  // =================================================================
 }));
