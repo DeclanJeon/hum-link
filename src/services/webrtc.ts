@@ -72,11 +72,14 @@ export class WebRTCManager {
    * @param message 전송할 문자열 데이터 (JSON.stringify 필요)
    * @returns 메시지를 성공적으로 보낸 피어의 수
    */
-  public sendToAllPeers(message: string): number {
+  public sendToAllPeers(message: any): number {
     let sentCount = 0;
     this.peers.forEach((peer) => {
       if (peer.connected) {
-        peer.send(message);
+        // simple-peer는 JSON.stringify 없이도 ArrayBuffer를 보낼 수 있습니다.
+        // 문자열이 아니면 그대로 보냅니다.
+        const dataToSend = typeof message === 'string' ? message : message;
+        peer.send(dataToSend);
         sentCount++;
       }
     });
@@ -107,12 +110,9 @@ export class WebRTCManager {
     peer.on('connect', () => this.events.onConnect(peerId));
     peer.on('stream', (stream) => this.events.onStream(peerId, stream));
     peer.on('data', (data) => {
-      try {
-        // Buffer를 문자열로 변환 후 JSON 파싱
-        this.events.onData(peerId, JSON.parse(data.toString()));
-      } catch (e) {
-        console.error("Error parsing data from peer:", data.toString(), e);
-      }
+      // ✅ 이제 onData는 받은 데이터를 그대로 상위 스토어로 전달합니다.
+      // 파싱 로직은 useWebRTCStore에서 담당합니다.
+      this.events.onData(peerId, data);
     });
     peer.on('close', () => this.events.onClose(peerId));
     peer.on('error', (err) => this.events.onError(peerId, err));
