@@ -4,6 +4,7 @@ import { ViewMode } from "@/stores/useUIManagementStore";
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { SubtitleOverlay } from './SubtitleOverlay'; // SubtitleOverlay 임포트
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface VideoLayoutProps {
   viewMode: ViewMode;
@@ -18,6 +19,7 @@ interface VideoLayoutProps {
 export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEnabled, peers, localTranscript, translationTargetLanguage }: VideoLayoutProps) => {
   // useWebRTCStore에서 transcriptionLanguage 가져오기
   const transcriptionLanguage = useWebRTCStore((state) => state.transcriptionLanguage);
+  const isMobile = useIsMobile();
   const allParticipants = [
     {
       isLocal: true,
@@ -44,7 +46,7 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
     const gridClass = getGridClass(total);
 
     return (
-      <div className={`grid ${gridClass} gap-4 w-full h-full p-4`}>
+      <div className={`grid ${gridClass} ${isMobile ? 'gap-2 w-full h-full p-2' : 'gap-4 w-full h-full p-4'}`}>
         {allParticipants.map(p => (
           <div key={p.userId} className="w-full h-full relative">
             <VideoPreview
@@ -70,7 +72,7 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
   return (
     <>
       {remotePeer ? (
-        <div className="absolute inset-4">
+        <div className={`absolute ${isMobile ? 'inset-2' : 'inset-4'}`}>
           <VideoPreview
             stream={remotePeer.stream || null}
             nickname={remotePeer.nickname}
@@ -86,13 +88,13 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
               return (
                 <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center rounded-lg gap-4">
                   <Loader2 className="w-8 h-8 text-white animate-spin" />
-                  <p className="text-white text-lg font-medium">Connecting to {remotePeer.nickname}...</p>
+                  <p className={`text-white ${isMobile ? 'text-base' : 'text-lg'} font-medium`}>Connecting to {remotePeer.nickname}...</p>
                 </div>
               );
             } else if (remotePeer.connectionState === 'disconnected' || remotePeer.connectionState === 'failed') {
               return (
                 <div className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-lg">
-                  <p className="text-white text-lg font-medium">Connection to {remotePeer.nickname} lost.</p>
+                  <p className={`text-white ${isMobile ? 'text-base' : 'text-lg'} font-medium`}>Connection to {remotePeer.nickname} lost.</p>
                 </div>
               );
             }
@@ -100,11 +102,13 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
           })()}
         </div>
       ) : (
-        <div className="absolute inset-4 flex items-center justify-center bg-muted/50 rounded-lg">
-          <p className="text-muted-foreground">Waiting for another participant to join...</p>
+        <div className={`absolute ${isMobile ? 'inset-2' : 'inset-4'} flex items-center justify-center bg-muted/50 rounded-lg`}>
+          <p className={`text-muted-foreground ${isMobile ? 'text-sm text-center px-4' : 'text-base'}`}>
+            Waiting for another participant to join...
+          </p>
         </div>
       )}
-      <div className="absolute bottom-24 right-6 w-48 lg:w-64 aspect-video z-20">
+      <div className={`absolute ${isMobile ? 'bottom-20 right-2 w-32 h-24' : 'bottom-24 right-6 w-48 lg:w-64 aspect-video'} z-20`}>
         <VideoPreview
           stream={localStream}
           nickname={localNickname}

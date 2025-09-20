@@ -15,9 +15,9 @@ interface WhiteboardActions {
   startDrawing: (e: React.MouseEvent<HTMLCanvasElement>) => void;
   draw: (e: React.MouseEvent<HTMLCanvasElement>) => void;
   stopDrawing: (e: React.MouseEvent<HTMLCanvasElement>) => void;
-  handleDrop: (e: React.DragEvent, toast: any) => void;
-  clearCanvas: (toast: any) => void;
-  downloadCanvas: (toast: any) => void;
+  handleDrop: (e: React.DragEvent) => void;
+  clearCanvas: () => void;
+  downloadCanvas: (canvas: HTMLCanvasElement) => void;
   setCurrentTool: (tool: Tool) => void;
   applyRemoteDrawEvent: (event: any) => void;
   reset: () => void;
@@ -78,7 +78,7 @@ export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>((s
     set({ isDrawing: false });
   },
 
-  handleDrop: (e: React.DragEvent, toast: any) => {
+  handleDrop: (e: React.DragEvent) => {
     e.preventDefault();
     const { context } = get();
     if (!context) return;
@@ -92,31 +92,25 @@ export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>((s
           const drawEvent = { type: 'image', src: img.src, pos };
           get().applyRemoteDrawEvent(drawEvent);
           sendDrawEvent(drawEvent);
-          toast.success("Image added to whiteboard!");
         };
         img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
-    } else {
-      toast.warning("Only image files can be dropped on the whiteboard.");
     }
   },
 
-  clearCanvas: (toast: any) => {
+  clearCanvas: () => {
     const event = { type: 'clear' };
     get().applyRemoteDrawEvent(event);
     sendDrawEvent(event);
-    toast.success("Whiteboard cleared");
   },
 
-  downloadCanvas: (toast: any) => {
-    const canvas = get().context?.canvas;
+  downloadCanvas: (canvas: HTMLCanvasElement) => {
     if (!canvas) return;
     const link = document.createElement("a");
     link.download = "singularity-whiteboard.png";
     link.href = canvas.toDataURL();
     link.click();
-    toast.success("Whiteboard downloaded");
   },
 
   applyRemoteDrawEvent: (event: any) => {

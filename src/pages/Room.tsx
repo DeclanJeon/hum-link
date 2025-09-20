@@ -5,6 +5,7 @@ import { useUIManagementStore } from "@/stores/useUIManagementStore";
 import { useLobbyStore } from "@/stores/useLobbyStore";
 import { useAutoHideControls } from "@/hooks/useAutoHideControls";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"; // [추가]
+import { useIsMobile } from "@/hooks/use-mobile";
 import { ControlBar } from "@/components/ControlBar";
 import { ChatPanel } from "@/components/ChatPanel";
 import { WhiteboardPanel } from "@/components/WhiteboardPanel";
@@ -16,6 +17,7 @@ const Room = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { roomTitle } = useParams<{ roomTitle: string }>();
+  const isMobile = useIsMobile();
   
   // WebRTC 스토어에서 화면 공유 관련 함수를 포함한 모든 필요한 상태와 액션을 가져옵니다.
  const {
@@ -99,7 +101,7 @@ const Room = () => {
       <WhiteboardPanel isOpen={activePanel === "whiteboard"} onClose={() => setActivePanel("whiteboard")} />
       <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel("settings")} />
 
-      <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+      <div className={`absolute ${isMobile ? 'bottom-4' : 'bottom-6'} left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
         <ControlBar
           isAudioEnabled={isAudioEnabled}
           isVideoEnabled={isVideoEnabled}

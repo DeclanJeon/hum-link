@@ -7,12 +7,14 @@ import { VideoPreview } from "@/components/VideoPreview";
 import { toast } from "sonner";
 import { Mic, MicOff, Video, VideoOff } from "lucide-react";
 import { useLobbyStore } from "@/stores/useLobbyStore";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { nanoid } from 'nanoid';
 
 const Lobby = () => {
   const navigate = useNavigate();
   const { roomTitle } = useParams<{ roomTitle: string }>();
   const location = useLocation();
+  const isMobile = useIsMobile();
 
   const {
     connectionDetails, isAudioEnabled, isVideoEnabled, audioLevel,
@@ -80,17 +82,17 @@ const Lobby = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-6">
-      <div className="max-w-4xl w-full">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Get Ready to Connect</h1>
-          <p className="text-muted-foreground">
+    <div className={`min-h-screen bg-background flex items-center justify-center ${isMobile ? 'p-4' : 'p-6'}`}>
+      <div className={`${isMobile ? 'max-w-lg' : 'max-w-4xl'} w-full`}>
+        <div className={`text-center ${isMobile ? 'mb-6' : 'mb-8'}`}>
+          <h1 className={`${isMobile ? 'text-2xl' : 'text-3xl'} font-bold text-foreground mb-2`}>Get Ready to Connect</h1>
+          <p className={`text-muted-foreground ${isMobile ? 'text-sm' : 'text-base'}`}>
             Joining <span className="text-primary font-medium">"{connectionDetails.roomTitle}"</span> as{" "}
             <span className="text-accent font-medium">{connectionDetails.nickname || '...'}</span>
           </p>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2">
+        <div className={`grid grid-cols-1 ${isMobile ? 'gap-6' : 'lg:grid-cols-3 gap-8'}`}>
+          <div className={`${isMobile ? 'order-2' : 'lg:col-span-2'}`}>
             <VideoPreview
               stream={stream}
               isVideoEnabled={isVideoEnabled}
@@ -98,7 +100,7 @@ const Lobby = () => {
               isLocalVideo={true}
             />
           </div>
-          <div className="space-y-6">
+          <div className={`${isMobile ? 'order-1 space-y-4' : 'space-y-6'}`}>
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Voice Check</h3>
               <div className="h-16 flex items-center justify-center">
@@ -132,8 +134,8 @@ const Lobby = () => {
             </div>
           </div>
         </div>
-        <div className="text-center mt-8">
-          <Button onClick={handleJoinRoom} className="btn-connection px-12 py-4 text-lg">
+        <div className={`text-center ${isMobile ? 'mt-6' : 'mt-8'}`}>
+          <Button onClick={handleJoinRoom} className={`btn-connection ${isMobile ? 'px-8 py-3 text-base w-full' : 'px-12 py-4 text-lg'}`}>
             Join Conversation
           </Button>
         </div>

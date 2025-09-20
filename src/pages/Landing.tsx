@@ -4,10 +4,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { useLandingStore } from "@/stores/useLandingStore";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 // Formula 1: Genius Insight - Maximum simplicity for connection focus
 const Landing = () => {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const { 
     roomTitle, 
     nickname, 
@@ -30,16 +32,20 @@ const Landing = () => {
     <div className="min-h-screen flex items-center justify-center bg-background relative overflow-hidden">
       {/* Ethereal Background Effects */}
       <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-background to-accent/5" />
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-breathing" />
-      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-accent/10 rounded-full blur-3xl animate-breathing" style={{ animationDelay: "2s" }} />
+      {!isMobile && (
+        <>
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-breathing" />
+          <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-accent/10 rounded-full blur-3xl animate-breathing" style={{ animationDelay: "2s" }} />
+        </>
+      )}
 
       {/* Main Content - Formula 1: Extreme Simplicity */}
-      <div className="relative z-10 w-full max-w-md px-6">
-        <div className="text-center mb-12">
-          <h1 className="text-5xl font-bold mb-4 text-gradient animate-breathing">
+      <div className={`relative z-10 w-full ${isMobile ? 'max-w-sm px-4' : 'max-w-md px-6'}`}>
+        <div className={`text-center ${isMobile ? 'mb-8' : 'mb-12'}`}>
+          <h1 className={`${isMobile ? 'text-3xl' : 'text-5xl'} font-bold mb-4 text-gradient animate-breathing`}>
             Singularity
           </h1>
-          <p className="text-muted-foreground text-lg">
+          <p className={`text-muted-foreground ${isMobile ? 'text-base' : 'text-lg'}`}>
             Where conversations become connections
           </p>
         </div>
@@ -55,7 +61,7 @@ const Landing = () => {
               placeholder="Enter your meeting room name..."
               value={roomTitle}
               onChange={(e) => setRoomTitle(e.target.value)}
-              className="h-12 text-lg bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20"
+              className={`${isMobile ? 'h-11 text-base' : 'h-12 text-lg'} bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20`}
               onKeyDown={(e) => e.key === "Enter" && connect()}
             />
           </div>
@@ -81,7 +87,7 @@ const Landing = () => {
               placeholder="Leave empty for a surprise..."
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
-              className="h-12 text-lg bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20"
+              className={`${isMobile ? 'h-11 text-base' : 'h-12 text-lg'} bg-input/50 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20`}
               onKeyDown={(e) => e.key === "Enter" && connect()}
             />
           </div>
@@ -89,7 +95,7 @@ const Landing = () => {
           {/* Connection Button - The Only Action */}
           <Button
             onClick={connect}
-            className="w-full h-14 text-lg btn-connection mt-8"
+            className={`w-full ${isMobile ? 'h-12 text-base mt-6' : 'h-14 text-lg mt-8'} btn-connection`}
             disabled={!roomTitle.trim()}
           >
             Connect

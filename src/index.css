@@ -210,6 +210,21 @@
   .fab.active {
     @apply bg-primary text-primary-foreground shadow-[var(--shadow-voice)];
   }
+
+  /* Mobile optimizations */
+  @media (max-width: 768px) {
+    .control-panel {
+      @apply p-2 rounded-lg;
+    }
+    
+    .fab {
+      @apply w-10 h-10;
+    }
+    
+    .btn-connection {
+      @apply px-6 py-3 text-base;
+    }
+  }
 }
 
 @layer utilities {
