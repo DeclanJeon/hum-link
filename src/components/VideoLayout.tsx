@@ -1,7 +1,9 @@
 import { VideoPreview } from "@/components/VideoPreview";
-import { PeerState } from "@/stores/useWebRTCStore";
+import { PeerState, useWebRTCStore } from "@/stores/useWebRTCStore";
 import { ViewMode } from "@/stores/useUIManagementStore";
 import { Loader2 } from "lucide-react";
+import { useState } from "react";
+import { SubtitleOverlay } from './SubtitleOverlay'; // SubtitleOverlay 임포트
 
 interface VideoLayoutProps {
   viewMode: ViewMode;
@@ -9,17 +11,22 @@ interface VideoLayoutProps {
   localNickname: string;
   localVideoEnabled: boolean;
   peers: PeerState[];
+  localTranscript: { text: string; isFinal: boolean }; // 로컬 자막 데이터 추가
+  translationTargetLanguage: string; // 번역 언어 설정 추가
 }
 
-export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEnabled, peers }: VideoLayoutProps) => {
+export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEnabled, peers, localTranscript, translationTargetLanguage }: VideoLayoutProps) => {
+  // useWebRTCStore에서 transcriptionLanguage 가져오기
+  const transcriptionLanguage = useWebRTCStore((state) => state.transcriptionLanguage);
   const allParticipants = [
-    { 
-      isLocal: true, 
-      userId: 'local', 
-      nickname: localNickname, 
-      stream: localStream, 
+    {
+      isLocal: true,
+      userId: 'local',
+      nickname: localNickname,
+      stream: localStream,
       videoEnabled: localVideoEnabled,
-      connectionState: 'connected'
+      connectionState: 'connected',
+      transcript: localTranscript // 로컬 참가자에 자막 데이터 추가
     },
     ...peers.map(p => ({ ...p, isLocal: false }))
   ];
@@ -46,6 +53,11 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
               isVideoEnabled={p.videoEnabled}
               isLocalVideo={p.isLocal}
             />
+            {/* ✨ 참가자 자막 오버레이 ✨ */}
+            <SubtitleOverlay
+              transcript={p.transcript ? { ...p.transcript, lang: (p.transcript as { text: string; isFinal: boolean; lang?: string }).lang || 'en-US' } : undefined}
+              targetLang={p.isLocal ? "none" : translationTargetLanguage} // 로컬 사용자는 번역하지 않음
+            />
           </div>
         ))}
       </div>
@@ -63,6 +75,11 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
             stream={remotePeer.stream || null}
             nickname={remotePeer.nickname}
             isVideoEnabled={remotePeer.videoEnabled}
+          />
+          {/* ✨ 원격 피어 자막 오버레이 ✨ */}
+          <SubtitleOverlay
+            transcript={remotePeer.transcript}
+            targetLang={translationTargetLanguage}
           />
           {(() => {
             if (remotePeer.connectionState === 'connecting') {
@@ -93,6 +110,11 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
           nickname={localNickname}
           isVideoEnabled={localVideoEnabled}
           isLocalVideo={true}
+        />
+        {/* ✨ 로컬 사용자 자막 오버레이 ✨ */}
+        <SubtitleOverlay
+          transcript={{ ...localTranscript, lang: transcriptionLanguage }} // 실제 언어 설정으로 변경 필요
+          targetLang="none" // 내 자막은 번역하지 않음
         />
       </div>
     </>

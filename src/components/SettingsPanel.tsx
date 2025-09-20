@@ -4,8 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
-import { X, Mic, Video, Volume2, Settings } from "lucide-react";
+import { X, Mic, Video, Volume2, Settings, MessageSquare } from "lucide-react";
 import { useSettingsStore } from "@/stores/useSettingsStore";
+// [추가] WebRTC 스토어에서 자막 관련 상태와 액션 가져오기
+import { Switch } from "@/components/ui/switch"; // [추가]
+import { useWebRTCStore } from "@/stores/useWebRTCStore"; // [수정]
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -26,6 +29,16 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
     setSpeakerVolume,
     initializeDevices
   } = useSettingsStore();
+
+  // [추가] WebRTC 스토어에서 자막 관련 상태와 액션 가져오기
+  const {
+    isTranscriptionEnabled,
+    transcriptionLanguage,
+    translationTargetLanguage,
+    toggleTranscription,
+    setTranscriptionLanguage,
+    setTranslationTargetLanguage,
+  } = useWebRTCStore();
 
   useEffect(() => {
     if (isOpen) {
@@ -126,6 +139,65 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
                       {device.label || `Camera ${device.deviceId.slice(0, 8)}`}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* [추가] Transcription & Translation Settings */}
+          <div className="space-y-4 pt-6 border-t">
+            <h3 className="text-lg font-medium flex items-center gap-2">
+              <MessageSquare className="w-4 h-4" />
+              Subtitles & Translation
+            </h3>
+
+            <div className="flex items-center justify-between rounded-lg border p-3 shadow-sm">
+              <div className="space-y-0.5">
+                <Label htmlFor="transcription-switch">Enable Real-time Subtitles</Label>
+                <p className="text-xs text-muted-foreground">
+                  Your speech will be converted to text for others.
+                </p>
+              </div>
+              <Switch
+                id="transcription-switch"
+                checked={isTranscriptionEnabled}
+                onCheckedChange={toggleTranscription}
+              />
+            </div>
+
+            {isTranscriptionEnabled && (
+              <div className="space-y-3">
+                <div>
+                  <Label htmlFor="speaking-language">My Speaking Language</Label>
+                  <Select value={transcriptionLanguage} onValueChange={setTranscriptionLanguage}>
+                    <SelectTrigger id="speaking-language">
+                      <SelectValue placeholder="Select language..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="en-US">English (US)</SelectItem>
+                      <SelectItem value="ko-KR">한국어</SelectItem>
+                      <SelectItem value="ja-JP">日本語</SelectItem>
+                      <SelectItem value="zh-CN">中文 (简体)</SelectItem>
+                      <SelectItem value="es-ES">Español</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+            
+            <div>
+              <Label htmlFor="translation-language">Translate Subtitles To</Label>
+              <Select value={translationTargetLanguage} onValueChange={setTranslationTargetLanguage}>
+                <SelectTrigger id="translation-language">
+                  <SelectValue placeholder="Select language..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Disabled</SelectItem>
+                  <SelectItem value="en">English</SelectItem>
+                  <SelectItem value="ko">Korean</SelectItem>
+                  <SelectItem value="ja">Japanese</SelectItem>
+                  <SelectItem value="zh">Chinese</SelectItem>
+                  <SelectItem value="es">Spanish</SelectItem>
                 </SelectContent>
               </Select>
             </div>

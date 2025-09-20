@@ -10,7 +10,8 @@ import {
   PhoneOff,
   Settings,
   LayoutGrid, // 변경점: 아이콘 추가
-  ScreenShare
+  ScreenShare,
+  Captions // [추가]
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -18,7 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ViewMode } from "@/stores/useWebRTCStore"; // 변경점: 타입 import
+import { ViewMode } from "@/stores/useUIManagementStore"; // [수정] ViewMode의 정확한 출처는 useUIManagementStore 입니다.
 
 interface ControlBarProps {
   isAudioEnabled: boolean;
@@ -29,6 +30,9 @@ interface ControlBarProps {
   // ====================== [ ✨ 신규 추가 ✨ ] ======================
   unreadMessageCount: number;
   // ==============================================================
+  // [추가] 자막 관련 props
+  isTranscriptionEnabled: boolean; // [추가]
+  onToggleTranscription: () => void; // [추가]
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onToggleChat: () => void;
@@ -48,6 +52,9 @@ export const ControlBar = ({
   // ====================== [ ✨ 신규 추가 ✨ ] ======================
   unreadMessageCount,
   // ==============================================================
+  // [추가] 자막 관련 props
+  isTranscriptionEnabled,
+  onToggleTranscription,
   onToggleAudio,
   onToggleVideo,
   onToggleChat,
@@ -79,6 +86,16 @@ export const ControlBar = ({
       </Button>
 
       <div className="w-px h-8 bg-border/50 mx-2" />
+
+      {/* [추가] 자막 토글 버튼 */}
+      <Button
+        variant="secondary"
+        size="lg"
+        onClick={onToggleTranscription}
+        className={`fab ${isTranscriptionEnabled ? "active" : ""}`}
+      >
+        <Captions className="w-5 h-5" />
+      </Button>
 
       {/* Collaboration Tools */}
       {/* ====================== [ 🚀 UI 수정 🚀 ] ====================== */}

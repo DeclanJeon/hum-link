@@ -7,7 +7,7 @@ import { useUIManagementStore } from './useUIManagementStore';
 import { ENV } from '@/config';
 import { nanoid } from 'nanoid';
 
-// Peer의 상태를 정의합니다.
+// [수정] Peer의 상태에 자막 정보 추가
 export interface PeerState {
   userId: string;
   nickname: string;
@@ -16,29 +16,29 @@ export interface PeerState {
   videoEnabled: boolean;
   isSharingScreen: boolean;
   connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
+  transcript?: { text: string; isFinal: boolean; lang: string }; // [추가] 상대방의 자막 정보
 }
 
-// DataChannel을 통해 전송될 메시지 타입을 정의합니다.
-// 파일 청크, 화이트보드 이벤트 등 모든 실시간 데이터를 구조화하여 안정성을 높입니다.
+// [수정] DataChannel 메시지 타입에 자막 추가
 type DataChannelMessage =
   | { type: 'chat'; payload: ChatMessage }
   | { type: 'typing-state'; payload: { isTyping: boolean } }
-  | { type: 'whiteboard-event'; payload: any } // 화이트보드 데이터
+  | { type: 'whiteboard-event'; payload: any }
   | { type: 'file-meta'; payload: FileMetadata }
-  | { type: 'file-chunk'; payload: { transferId: string; chunk: number[]; isLast: boolean } }; // 청크를 숫자 배열로 변환하여 전송
+  | { type: 'file-chunk'; payload: { transferId: string; chunk: number[]; isLast: boolean } }
+  | { type: 'transcription'; payload: { text: string; isFinal: boolean; lang: string } }; // [추가]
 
-// 수신된 객체가 DataChannelMessage 타입인지 확인하는 타입 가드
 function isDataChannelMessage(obj: any): obj is DataChannelMessage {
     return obj && typeof obj.type === 'string' && 'payload' in obj;
 }
 
-// WebRTC 상태 인터페이스
+// [수정] WebRTC 상태 인터페이스 확장
 interface WebRTCState {
   roomId: string | null;
   userId: string | null;
   nickname: string | null;
   localStream: MediaStream | null;
-  originalVideoTrack: MediaStreamTrack | null; // 화면 공유 이전의 비디오 트랙을 저장
+  originalVideoTrack: MediaStreamTrack | null;
   signalingClient: SignalingClient | null;
   webRTCManager: WebRTCManager | null;
   peers: Map<string, PeerState>;
@@ -46,10 +46,14 @@ interface WebRTCState {
   isAudioEnabled: boolean;
   isVideoEnabled: boolean;
   isSharingScreen: boolean;
-  preShareVideoState: boolean | null; // [개선] 공유 시작 전 비디오 상태 저장
+  preShareVideoState: boolean | null;
+  isTranscriptionEnabled: boolean; // [추가]
+  transcriptionLanguage: string; // [추가] 내 발화 언어
+  translationTargetLanguage: string; // [추가] 번역 목표 언어
+  localTranscript: { text: string; isFinal: boolean }; // [추가] 내 자막
 }
 
-// WebRTC 액션 인터페이스
+// [수정] WebRTC 액션 인터페이스 확장
 interface WebRTCActions {
   init: (roomId: string, userId: string, nickname: string, localStream: MediaStream) => void;
   cleanup: () => void;
@@ -60,6 +64,11 @@ interface WebRTCActions {
   sendTypingState: (isTyping: boolean) => void;
   sendWhiteboardData: (data: any) => void;
   sendFile: (file: File) => void;
+  toggleTranscription: () => void; // [추가]
+  setTranscriptionLanguage: (lang: string) => void; // [추가]
+  setTranslationTargetLanguage: (lang: string) => void; // [추가]
+  setLocalTranscript: (transcript: { text: string; isFinal: boolean }) => void; // [추가]
+  sendTranscription: (text: string, isFinal: boolean) => void; // [추가]
 }
 
 export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => ({
@@ -77,6 +86,11 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
   isVideoEnabled: true,
   isSharingScreen: false,
   preShareVideoState: null, // [개선] 초기값 설정
+  // ... 기존 초기 상태
+  isTranscriptionEnabled: false,
+  transcriptionLanguage: 'en-US',
+  translationTargetLanguage: 'none',
+  localTranscript: { text: '', isFinal: false },
 
   // 초기화 함수
   init: (roomId, userId, nickname, localStream) => {
@@ -127,6 +141,14 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
               const { transferId, chunk, isLast } = parsedData.payload;
               const buffer = new Uint8Array(chunk).buffer;
               useChatStore.getState().appendFileChunk(transferId, buffer, isLast);
+              break;
+            case 'transcription': // [추가] 자막 데이터 수신 처리
+              set(produce(state => {
+                const peer = state.peers.get(peerId);
+                if (peer) {
+                  peer.transcript = parsedData.payload;
+                }
+              }));
               break;
           }
         } catch (e) {
@@ -333,5 +355,27 @@ export const useWebRTCStore = create<WebRTCState & WebRTCActions>((set, get) => 
     };
     const readSlice = (o: number) => reader.readAsArrayBuffer(file.slice(o, o + chunkSize));
     readSlice(0);
+  },
+
+  // [추가] 자막 기능 토글
+  toggleTranscription: () => set((state) => ({ isTranscriptionEnabled: !state.isTranscriptionEnabled })),
+
+  // [추가] 발화 언어 설정
+  setTranscriptionLanguage: (lang) => set({ transcriptionLanguage: lang }),
+
+  // [추가] 번역 목표 언어 설정
+  setTranslationTargetLanguage: (lang) => set({ translationTargetLanguage: lang }),
+
+  // [추가] 내 화면에 표시될 자막 설정
+ setLocalTranscript: (transcript) => set({ localTranscript: transcript }),
+
+  // [추가] 자막 데이터 전송
+  sendTranscription: (text, isFinal) => {
+    const { webRTCManager, transcriptionLanguage } = get();
+    const data: DataChannelMessage = {
+      type: 'transcription',
+      payload: { text, isFinal, lang: transcriptionLanguage },
+    };
+    webRTCManager?.sendToAllPeers(JSON.stringify(data));
   },
 }));
