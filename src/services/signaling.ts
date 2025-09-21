@@ -1,6 +1,6 @@
 import { io, Socket } from "socket.io-client";
 import { SignalData } from "simple-peer";
-import { ChatMessage } from "@/stores/useWebRTCStore"; // ChatMessage 타입을 가져옵니다.
+import { ChatMessage } from "@/stores/useChatStore";
 
 // 이벤트 인터페이스 확장
 interface SignalingEvents {
