@@ -77,9 +77,8 @@ export class WebRTCManager {
         }
       }
     });
-    if (sentCount > 0) {
-        console.log(`[WebRTCManager] ${sentCount}개의 피어에게 데이터 전송 완료.`);
-    }
+    // ✅ 수정: 이 로그는 usePeerConnectionStore로 이동했으므로 여기서는 제거하여 중복을 피합니다.
+    // if (sentCount > 0) { ... }
     return sentCount;
   }
 

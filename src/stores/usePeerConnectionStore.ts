@@ -121,8 +121,22 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
     }));
   },
 
-  sendToAllPeers: (message) => {
-    return get().webRTCManager?.sendToAllPeers(message) ?? 0;
+  sendToAllPeers: (message: string) => { // 타입을 string으로 명시
+    // ✅ 수정: 로그를 강화하여 전송되는 데이터의 타입을 명시
+    let messageType = 'unknown';
+    try {
+      const parsed = JSON.parse(message);
+      messageType = parsed.type || messageType;
+    } catch (e) {
+      // JSON 파싱 실패 시, 일반 텍스트 메시지로 간주
+    }
+    
+    const sentCount = get().webRTCManager?.sendToAllPeers(message) ?? 0;
+    
+    if (sentCount > 0) {
+      console.log(`[WebRTCManager] 📤 [${messageType}] 타입 데이터를 ${sentCount}개의 피어에게 전송 완료.`);
+    }
+    return sentCount;
   },
 
    replaceTrack: (oldTrack, newTrack, stream) => {
