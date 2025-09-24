@@ -1,8 +1,8 @@
-import { useWebRTCStore } from "@/stores/useWebRTCStore";
+import { useSignalingStore } from "@/stores/useSignalingStore"; // <<< [수정]
 import { WifiOff } from "lucide-react";
 
 export const GlobalConnectionStatus = () => {
-  const signalingStatus = useWebRTCStore((state) => state.signalingStatus);
+  const signalingStatus = useSignalingStore((state) => state.status); // <<< [수정]
 
   if (signalingStatus === 'connected') {
     return null;

@@ -16,6 +16,7 @@ interface UIManagementActions {
   setViewMode: (mode: ViewMode) => void;
   incrementUnreadMessageCount: () => void;
   resetUnreadMessageCount: () => void;
+  reset: () => void;
 }
 
 export const useUIManagementStore = create<UIManagementState & UIManagementActions>((set, get) => ({
@@ -43,4 +44,11 @@ export const useUIManagementStore = create<UIManagementState & UIManagementActio
   incrementUnreadMessageCount: () => set((state) => ({ unreadMessageCount: state.unreadMessageCount + 1 })),
 
   resetUnreadMessageCount: () => set({ unreadMessageCount: 0 }),
+
+  reset: () => set({
+    activePanel: 'none',
+    showControls: true,
+    viewMode: 'speaker',
+    unreadMessageCount: 0,
+  }),
 }));

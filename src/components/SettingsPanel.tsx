@@ -6,9 +6,8 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { X, Mic, Video, Volume2, Settings, MessageSquare } from "lucide-react";
 import { useSettingsStore } from "@/stores/useSettingsStore";
-// [추가] WebRTC 스토어에서 자막 관련 상태와 액션 가져오기
-import { Switch } from "@/components/ui/switch"; // [추가]
-import { useWebRTCStore } from "@/stores/useWebRTCStore"; // [수정]
+import { Switch } from "@/components/ui/switch";
+import { useTranscriptionStore } from "@/stores/useTranscriptionStore";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -30,7 +29,7 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
     initializeDevices
   } = useSettingsStore();
 
-  // [추가] WebRTC 스토어에서 자막 관련 상태와 액션 가져오기
+  // <<< [수정] useTranscriptionStore에서 상태와 액션 가져오기
   const {
     isTranscriptionEnabled,
     transcriptionLanguage,
@@ -38,7 +37,7 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
     toggleTranscription,
     setTranscriptionLanguage,
     setTranslationTargetLanguage,
-  } = useWebRTCStore();
+  } = useTranscriptionStore();
 
   useEffect(() => {
     if (isOpen) {

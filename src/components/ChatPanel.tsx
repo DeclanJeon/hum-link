@@ -4,8 +4,9 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { X, Send, Paperclip } from "lucide-react";
 import { useChatStore, ChatMessage } from "@/stores/useChatStore";
-import { useWebRTCStore } from "@/stores/useWebRTCStore";
+import { usePeerConnectionStore } from "@/stores/usePeerConnectionStore"; 
 import { FileMessage } from "./FileMessage";
+import { nanoid } from "nanoid";
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -13,8 +14,13 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
-  const { chatMessages, isTyping } = useChatStore();
-  const { sendChatMessage, sendFile, sendTypingState, userId } = useWebRTCStore();
+  const { chatMessages, isTyping, addMessage } = useChatStore();
+  // ✅ 수정: sendToAllPeers와 sendFile 액션 가져오기
+  const { sendToAllPeers, sendFile } = usePeerConnectionStore();
+  
+  const userId = 'local-user'; 
+  const nickname = 'You';
+
   const [newMessage, setNewMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -23,6 +29,20 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
+
+  const sendTypingState = (isTyping: boolean) => {
+    const data = { type: 'typing-state', payload: { isTyping } };
+    sendToAllPeers(JSON.stringify(data));
+  };
+
+  const sendChatMessage = (text: string) => {
+    if (!userId || !nickname) return;
+    
+    const message: ChatMessage = { id: nanoid(), type: 'text', text, senderId: userId, senderNickname: nickname, timestamp: Date.now() };
+    addMessage(message);
+    const data = { type: 'chat', payload: message };
+    sendToAllPeers(JSON.stringify(data));
+  }
 
   const handleSendMessage = () => {
     if (newMessage.trim()) {
@@ -33,9 +53,13 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
     }
   };
 
+  // ✅ 수정: 파일 선택 시 sendFile 액션 호출
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) sendFile(file);
+    if (file) {
+      sendFile(file); // 파일 전송 시작
+    }
+    // 입력 필드 초기화
     if(fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -44,7 +68,6 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewMessage(e.target.value);
     
-    // 타이핑 상태 전송 로직
     if (!typingTimeoutRef.current) {
       sendTypingState(true);
     } else {
@@ -54,7 +77,7 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
     typingTimeoutRef.current = setTimeout(() => {
       sendTypingState(false);
       typingTimeoutRef.current = null;
-    }, 2000); // 2초 후 타이핑 중지 전송
+    }, 2000);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -64,7 +87,6 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
     }
   };
 
-  // "입력 중"인 사용자 닉네임 목록을 생성합니다.
   const typingUsers = useMemo(() => Array.from(isTyping.values()), [isTyping]);
 
   if (!isOpen) return null;
@@ -99,7 +121,6 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
         </div>
       </ScrollArea>
       
-      {/* 타이핑 인디케이터 UI */}
       <div className="h-6 px-4 text-xs text-muted-foreground italic transition-opacity duration-300">
         {typingUsers.length > 0 && (
           <p>{typingUsers.join(', ')} {typingUsers.length > 1 ? 'are' : 'is'} typing...</p>

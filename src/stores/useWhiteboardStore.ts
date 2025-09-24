@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { useWebRTCStore } from './useWebRTCStore';
+import { usePeerConnectionStore } from './usePeerConnectionStore'; // useWebRTCStore에서 변경
 
 type Tool = "pen" | "square" | "circle" | "eraser";
 
@@ -25,7 +25,9 @@ interface WhiteboardActions {
 
 // 그리기 이벤트 데이터를 전송하는 헬퍼 함수
 const sendDrawEvent = (event: any) => {
-  useWebRTCStore.getState().sendWhiteboardData(event);
+  const { sendToAllPeers } = usePeerConnectionStore.getState();
+  const data = { type: 'whiteboard-event', payload: event };
+  sendToAllPeers(JSON.stringify(data));
 };
 
 export const useWhiteboardStore = create<WhiteboardState & WhiteboardActions>((set, get) => ({

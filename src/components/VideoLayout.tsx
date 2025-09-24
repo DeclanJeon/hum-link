@@ -1,34 +1,31 @@
 import { VideoPreview } from "@/components/VideoPreview";
-import { PeerState, useWebRTCStore } from "@/stores/useWebRTCStore";
-import { ViewMode } from "@/stores/useUIManagementStore";
+import { usePeerConnectionStore } from "@/stores/usePeerConnectionStore";
+import { useUIManagementStore } from "@/stores/useUIManagementStore";
+import { useMediaDeviceStore } from "@/stores/useMediaDeviceStore";
+import { useTranscriptionStore } from "@/stores/useTranscriptionStore";
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
-import { SubtitleOverlay } from './SubtitleOverlay'; // SubtitleOverlay 임포트
+import { SubtitleOverlay } from './SubtitleOverlay';
 
-interface VideoLayoutProps {
-  viewMode: ViewMode;
-  localStream: MediaStream | null;
-  localNickname: string;
-  localVideoEnabled: boolean;
-  peers: PeerState[];
-  localTranscript: { text: string; isFinal: boolean }; // 로컬 자막 데이터 추가
-  translationTargetLanguage: string; // 번역 언어 설정 추가
-}
+export const VideoLayout = () => {
+  // --- 스토어에서 직접 상태 가져오기 ---
+  const { viewMode } = useUIManagementStore();
+  const { localStream, isVideoEnabled } = useMediaDeviceStore();
+  const { peers } = usePeerConnectionStore();
+  const { localTranscript, transcriptionLanguage, translationTargetLanguage } = useTranscriptionStore();
+  
+  const localNickname = 'You'; 
 
-export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEnabled, peers, localTranscript, translationTargetLanguage }: VideoLayoutProps) => {
-  // useWebRTCStore에서 transcriptionLanguage 가져오기
-  const transcriptionLanguage = useWebRTCStore((state) => state.transcriptionLanguage);
   const allParticipants = [
     {
       isLocal: true,
       userId: 'local',
       nickname: localNickname,
       stream: localStream,
-      videoEnabled: localVideoEnabled,
-      connectionState: 'connected',
-      transcript: localTranscript // 로컬 참가자에 자막 데이터 추가
+      videoEnabled: isVideoEnabled,
+      connectionState: 'connected' as const,
+      transcript: localTranscript
     },
-    ...peers.map(p => ({ ...p, isLocal: false }))
+    ...Array.from(peers.values()).map(p => ({ ...p, isLocal: false }))
   ];
 
   if (viewMode === 'grid') {
@@ -53,10 +50,9 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
               isVideoEnabled={p.videoEnabled}
               isLocalVideo={p.isLocal}
             />
-            {/* ✨ 참가자 자막 오버레이 ✨ */}
             <SubtitleOverlay
-              transcript={p.transcript ? { ...p.transcript, lang: (p.transcript as { text: string; isFinal: boolean; lang?: string }).lang || 'en-US' } : undefined}
-              targetLang={p.isLocal ? "none" : translationTargetLanguage} // 로컬 사용자는 번역하지 않음
+              transcript={p.transcript ? { ...p.transcript, lang: (p.transcript as any).lang || 'en-US' } : undefined}
+              targetLang={p.isLocal ? "none" : translationTargetLanguage}
             />
           </div>
         ))}
@@ -64,8 +60,7 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
     );
   }
 
-  // 'speaker' 뷰 모드
-  const remotePeer = peers.length > 0 ? peers[0] : null;
+  const remotePeer = peers.size > 0 ? Array.from(peers.values())[0] : null;
 
   return (
     <>
@@ -76,7 +71,6 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
             nickname={remotePeer.nickname}
             isVideoEnabled={remotePeer.videoEnabled}
           />
-          {/* ✨ 원격 피어 자막 오버레이 ✨ */}
           <SubtitleOverlay
             transcript={remotePeer.transcript}
             targetLang={translationTargetLanguage}
@@ -108,13 +102,12 @@ export const VideoLayout = ({ viewMode, localStream, localNickname, localVideoEn
         <VideoPreview
           stream={localStream}
           nickname={localNickname}
-          isVideoEnabled={localVideoEnabled}
+          isVideoEnabled={isVideoEnabled}
           isLocalVideo={true}
         />
-        {/* ✨ 로컬 사용자 자막 오버레이 ✨ */}
         <SubtitleOverlay
-          transcript={{ ...localTranscript, lang: transcriptionLanguage }} // 실제 언어 설정으로 변경 필요
-          targetLang="none" // 내 자막은 번역하지 않음
+          transcript={{ ...localTranscript, lang: transcriptionLanguage }}
+          targetLang="none"
         />
       </div>
     </>

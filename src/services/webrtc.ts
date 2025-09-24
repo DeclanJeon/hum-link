@@ -1,8 +1,6 @@
-// @types/simple-peer를 설치하여 타입 안정성을 확보합니다.
 import Peer from 'simple-peer/simplepeer.min.js';
 import type { Instance as PeerInstance, SignalData } from 'simple-peer';
 
-// WebRTC 이벤트 인터페이스
 interface WebRTCEvents {
   onSignal: (peerId: string, signal: SignalData) => void;
   onConnect: (peerId: string) => void;
@@ -12,9 +10,6 @@ interface WebRTCEvents {
   onError: (peerId: string, error: Error) => void;
 }
 
-/**
- * WebRTCManager: simple-peer를 래핑하여 Peer Connection 관리를 추상화합니다.
- */
 export class WebRTCManager {
   private peers: Map<string, PeerInstance> = new Map();
   private localStream: MediaStream;
@@ -25,10 +20,11 @@ export class WebRTCManager {
     this.events = events;
   }
 
-  public createPeer(peerId: string): void {
-    console.log('[WebRTCManager] Creating peer (initiator)', { peerId });
+  // ✅ 수정: initiator 플래그를 인자로 받음
+  public createPeer(peerId: string, initiator: boolean): void {
+    console.log(`[WebRTCManager] 피어 생성 요청 (ID: ${peerId}, Initiator: ${initiator})`);
     const peer = new Peer({
-      initiator: true,
+      initiator: initiator,
       stream: this.localStream,
       trickle: true,
     });
@@ -37,8 +33,9 @@ export class WebRTCManager {
     this.peers.set(peerId, peer);
   }
 
+  // ✅ 수정: 이 함수는 이제 initiator가 false일 때만 호출됨
   public receiveSignal(peerId: string, signal: SignalData): void {
-    console.log('[WebRTCManager] Receiving signal for non-initiator peer', { peerId });
+    console.log(`[WebRTCManager] Non-initiator 피어(${peerId})를 위한 시그널 수신 및 처리.`);
     const peer = new Peer({
       initiator: false,
       stream: this.localStream,
@@ -52,19 +49,17 @@ export class WebRTCManager {
   public signalPeer(peerId: string, signal: SignalData): void {
     const peer = this.peers.get(peerId);
     if (peer) {
-      console.log('[WebRTCManager] Signaling existing peer', { peerId });
+      console.log(`[WebRTCManager] 기존 피어(${peerId})에게 시그널 전달.`);
       peer.signal(signal);
     } else {
-      // 피어를 찾지 못했을 때 새 피어를 생성하는 대신 경고를 남깁니다.
-      // 신호 교환 로직은 상위 스토어에서 명확히 관리해야 합니다.
-      console.warn(`[WebRTCManager] Peer not found for signaling: ${peerId}`);
+      console.warn(`[WebRTCManager] 시그널링할 피어를 찾지 못함: ${peerId}`);
     }
   }
 
   public removePeer(peerId: string): void {
     const peer = this.peers.get(peerId);
     if (peer) {
-      console.log('[WebRTCManager] Removing peer', { peerId });
+      console.log(`[WebRTCManager] 피어(${peerId}) 제거.`);
       peer.destroy();
       this.peers.delete(peerId);
     }
@@ -72,24 +67,26 @@ export class WebRTCManager {
   
   public sendToAllPeers(message: any): number {
     let sentCount = 0;
-    this.peers.forEach((peer) => {
+    this.peers.forEach((peer, peerId) => {
       if (peer.connected) {
-        peer.send(message);
-        sentCount++;
+        try {
+          peer.send(message);
+          sentCount++;
+        } catch (error) {
+          console.error(`[WebRTCManager] 피어(${peerId})에게 데이터 전송 실패:`, error);
+        }
       }
     });
+    if (sentCount > 0) {
+        console.log(`[WebRTCManager] ${sentCount}개의 피어에게 데이터 전송 완료.`);
+    }
     return sentCount;
   }
 
-  /**
-   * 스트림의 특정 트랙(오디오 또는 비디오)을 교체합니다.
-   * 화면 공유나 장치 변경 시 연결을 끊지 않고 스트림을 전환하는 데 사용됩니다.
-   * @param oldTrack 교체될 기존 트랙
-   * @param newTrack 새로 적용될 트랙
-   */
-  public replaceTrack(oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack): void {
+  public replaceTrack(oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack, stream: MediaStream): void {
+    console.log(`[WebRTCManager] 모든 피어의 미디어 트랙 교체: ${oldTrack.kind}`);
     this.peers.forEach(peer => {
-      peer.replaceTrack(oldTrack, newTrack, this.localStream);
+      peer.replaceTrack(oldTrack, newTrack, stream);
     });
   }
   
@@ -104,6 +101,7 @@ export class WebRTCManager {
   }
 
   public destroyAll(): void {
+    console.log('[WebRTCManager] 모든 피어 연결 파괴.');
     this.peers.forEach(peer => peer.destroy());
     this.peers.clear();
   }

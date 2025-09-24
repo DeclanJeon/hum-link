@@ -1,17 +1,8 @@
+import { useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
 import { 
-  Mic, 
-  MicOff, 
-  Video, 
-  VideoOff, 
-  MessageSquare, 
-  Palette,
-  MoreHorizontal,
-  PhoneOff,
-  Settings,
-  LayoutGrid, // 변경점: 아이콘 추가
-  ScreenShare,
-  Captions // [추가]
+  Mic, MicOff, Video, VideoOff, MessageSquare, Palette,
+  MoreHorizontal, PhoneOff, Settings, LayoutGrid, ScreenShare, Captions
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -19,58 +10,38 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ViewMode } from "@/stores/useUIManagementStore"; // [수정] ViewMode의 정확한 출처는 useUIManagementStore 입니다.
+import { toast } from "sonner";
+import { useMediaDeviceStore } from '@/stores/useMediaDeviceStore';
+import { useUIManagementStore, ViewMode } from '@/stores/useUIManagementStore';
+import { useTranscriptionStore } from '@/stores/useTranscriptionStore';
 
-interface ControlBarProps {
-  isAudioEnabled: boolean;
-  isVideoEnabled: boolean;
-  isSharingScreen: boolean; // 변경점: 화면 공유 상태 prop 추가
-  activePanel: "none" | "chat" | "whiteboard" | "settings";
-  viewMode: ViewMode; // 변경점: 현재 뷰 모드 prop 추가
-  // ====================== [ ✨ 신규 추가 ✨ ] ======================
-  unreadMessageCount: number;
-  // ==============================================================
-  // [추가] 자막 관련 props
-  isTranscriptionEnabled: boolean; // [추가]
-  onToggleTranscription: () => void; // [추가]
-  onToggleAudio: () => void;
-  onToggleVideo: () => void;
-  onToggleChat: () => void;
-  onToggleWhiteboard: () => void;
-  onScreenShare: () => void;
-  onOpenSettings: () => void;
-  onSetViewMode: (mode: ViewMode) => void; // 변경점: 뷰 모드 변경 함수 prop 추가
-  onLeave: () => void;
-}
+// <<< [수정] Props 인터페이스 제거 또는 최소화
+// interface ControlBarProps { ... }
 
-export const ControlBar = ({
-  isAudioEnabled,
-  isVideoEnabled,
-  isSharingScreen, // 변경점: prop 사용
-  activePanel,
-  viewMode,
-  // ====================== [ ✨ 신규 추가 ✨ ] ======================
-  unreadMessageCount,
-  // ==============================================================
-  // [추가] 자막 관련 props
-  isTranscriptionEnabled,
-  onToggleTranscription,
-  onToggleAudio,
-  onToggleVideo,
-  onToggleChat,
-  onToggleWhiteboard,
-  onScreenShare,
-  onOpenSettings,
-  onSetViewMode,
-  onLeave
-}: ControlBarProps) => {
+export const ControlBar = () => {
+  const navigate = useNavigate();
+
+  // --- 스토어에서 직접 상태와 액션 가져오기 ---
+  const { isAudioEnabled, isVideoEnabled, isSharingScreen, toggleAudio, toggleVideo, toggleScreenShare } = useMediaDeviceStore();
+  const { activePanel, viewMode, unreadMessageCount, setActivePanel, setViewMode } = useUIManagementStore();
+  const { isTranscriptionEnabled, toggleTranscription } = useTranscriptionStore();
+
+  // Room.tsx의 cleanup 로직을 가져옵니다. 
+  // 실제로는 useRoomOrchestrator 같은 곳에 통합된 cleanup 함수를 호출하는 것이 더 좋습니다.
+  // 여기서는 간단하게 navigate만 처리합니다.
+  const handleLeave = () => {
+    // Cleanup 로직은 useRoomOrchestrator에서 처리되므로 여기서는 페이지 이동만 담당합니다.
+    navigate('/');
+    toast.info("You have left the room.");
+  };
+
   return (
     <div className="control-panel flex items-center gap-3 px-6 py-3">
       {/* Core Controls */}
       <Button
         variant={isAudioEnabled ? "secondary" : "destructive"}
         size="lg"
-        onClick={onToggleAudio}
+        onClick={toggleAudio}
         className={`fab ${isAudioEnabled ? "" : "active"}`}
       >
         {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
@@ -79,7 +50,7 @@ export const ControlBar = ({
       <Button
         variant={isVideoEnabled ? "secondary" : "destructive"}
         size="lg"
-        onClick={onToggleVideo}
+        onClick={toggleVideo}
         className={`fab ${isVideoEnabled ? "" : "active"}`}
       >
         {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
@@ -87,23 +58,22 @@ export const ControlBar = ({
 
       <div className="w-px h-8 bg-border/50 mx-2" />
 
-      {/* [추가] 자막 토글 버튼 */}
+      {/* Transcription Toggle */}
       <Button
         variant="secondary"
         size="lg"
-        onClick={onToggleTranscription}
+        onClick={toggleTranscription}
         className={`fab ${isTranscriptionEnabled ? "active" : ""}`}
       >
         <Captions className="w-5 h-5" />
       </Button>
 
       {/* Collaboration Tools */}
-      {/* ====================== [ 🚀 UI 수정 🚀 ] ====================== */}
       <div className="relative">
         <Button
           variant="secondary"
           size="lg"
-          onClick={onToggleChat}
+          onClick={() => setActivePanel("chat")}
           className={`fab ${activePanel === "chat" ? "active" : ""}`}
         >
           <MessageSquare className="w-5 h-5" />
@@ -114,28 +84,26 @@ export const ControlBar = ({
           </div>
         )}
       </div>
-      {/* ============================================================== */}
 
       <Button
         variant="secondary"
         size="lg"
-        onClick={onToggleWhiteboard}
+        onClick={() => setActivePanel("whiteboard")}
         className={`fab ${activePanel === "whiteboard" ? "active" : ""}`}
       >
         <Palette className="w-5 h-5" />
       </Button>
       
-      {/* 변경점: isSharingScreen 상태에 따라 버튼 스타일을 동적으로 변경 */}
       <Button
         variant="secondary"
         size="lg"
-        onClick={onScreenShare}
+        onClick={() => toggleScreenShare(toast)}
         className={`fab ${isSharingScreen ? "active" : ""}`}
       >
         <ScreenShare className="w-5 h-5" />
       </Button>
 
-      {/* 변경점: 뷰 모드 변경 드롭다운 메뉴 추가 */}
+      {/* View Mode Menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="lg" className="fab">
@@ -143,10 +111,10 @@ export const ControlBar = ({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="center" side="top" className="mb-2">
-          <DropdownMenuItem onClick={() => onSetViewMode('speaker')} disabled={viewMode === 'speaker'}>
+          <DropdownMenuItem onClick={() => setViewMode('speaker')} disabled={viewMode === 'speaker'}>
             Speaker View
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onSetViewMode('grid')} disabled={viewMode === 'grid'}>
+          <DropdownMenuItem onClick={() => setViewMode('grid')} disabled={viewMode === 'grid'}>
             Grid View
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -160,7 +128,7 @@ export const ControlBar = ({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="center" side="top" className="mb-2">
-          <DropdownMenuItem onClick={onOpenSettings}>
+          <DropdownMenuItem onClick={() => setActivePanel("settings")}>
             <Settings className="w-4 h-4 mr-2" />
             Settings
           </DropdownMenuItem>
@@ -173,7 +141,7 @@ export const ControlBar = ({
       <Button
         variant="destructive"
         size="lg"
-        onClick={onLeave}
+        onClick={handleLeave}
         className="fab bg-destructive hover:bg-destructive/80"
       >
         <PhoneOff className="w-5 h-5" />

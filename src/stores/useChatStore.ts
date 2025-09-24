@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
-import { useWhiteboardStore } from './useWhiteboardStore'; // 순환 참조를 피하기 위해 타입만 임포트하거나 동적 임포트 고려
+import { useWhiteboardStore } from './useWhiteboardStore';
 
 // 파일 메타데이터
 export interface FileMetadata {
@@ -10,7 +10,7 @@ export interface FileMetadata {
   type: string;
 }
 
-// 파일 전송 진행 상태
+// 파일 전송 상태
 export interface FileTransferProgress {
   progress: number; // 0 to 1
   isSending: boolean;
@@ -46,7 +46,7 @@ interface ChatActions {
   updateFileProgress: (transferId: string, loaded: number) => void;
   appendFileChunk: (transferId: string, chunk: ArrayBuffer, isLast: boolean) => void;
   setTypingState: (userId: string, nickname: string, isTyping: boolean) => void;
-  applyRemoteDrawEvent: (event: any) => void; // 화이트보드 이벤트를 적용하는 액션 추가
+  applyRemoteDrawEvent: (event: any) => void; 
   clearChat: () => void;
 }
 
@@ -62,6 +62,7 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
     }
   })),
 
+  // ✅ 수정: transferId를 메시지 id로 사용하도록 수정
   addFileMessage: (senderId, senderNickname, fileMeta, isLocal = false) => set(produce((state: ChatState) => {
     const newFileMessage: ChatMessage = { id: fileMeta.transferId, type: 'file', fileMeta, senderId, senderNickname, timestamp: Date.now() };
     state.chatMessages.push(newFileMessage);
@@ -111,9 +112,7 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
     }
   })),
   
-  // 다른 사용자로부터 받은 화이트보드 데이터를 로컬 캔버스에 그립니다.
   applyRemoteDrawEvent: (event) => {
-    // 순환 참조를 피하기 위해 스토어 액션 내에서 다른 스토어의 상태를 가져옵니다.
     const { applyRemoteDrawEvent: applyToWhiteboard } = useWhiteboardStore.getState();
     applyToWhiteboard(event);
   },
