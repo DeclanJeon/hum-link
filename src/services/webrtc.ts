@@ -20,109 +20,77 @@ export class WebRTCManager {
     this.events = events;
   }
 
-  public createPeer(peerId: string, initiator: boolean): void {
-    console.log(`[WebRTCManager] 피어 생성 요청 (ID: ${peerId}, Initiator: ${initiator})`);
+  public createPeer(peerId: string, initiator: boolean): PeerInstance {
     const peer = new Peer({
       initiator: initiator,
       stream: this.localStream,
       trickle: true,
+      destroyOnSignalError: false, // 1. 에러 발생 시 자동 파괴 방지
     });
-
     this.setupPeerEvents(peer, peerId);
     this.peers.set(peerId, peer);
+    return peer;
   }
 
   public receiveSignal(peerId: string, signal: SignalData): void {
-    console.log(`[WebRTCManager] Non-initiator 피어(${peerId})를 위한 시그널 수신 및 처리.`);
-    const peer = new Peer({
-      initiator: false,
-      stream: this.localStream,
-      trickle: true,
-    });
+    const peer = this.createPeer(peerId, false);
     peer.signal(signal);
-    this.setupPeerEvents(peer, peerId);
-    this.peers.set(peerId, peer);
   }
 
   public signalPeer(peerId: string, signal: SignalData): void {
     const peer = this.peers.get(peerId);
-    if (peer) {
-      console.log(`[WebRTCManager] 기존 피어(${peerId})에게 시그널 전달.`);
-      peer.signal(signal);
-    } else {
-      console.warn(`[WebRTCManager] 시그널링할 피어를 찾지 못함: ${peerId}`);
-    }
+    if (peer) peer.signal(signal);
   }
 
   public removePeer(peerId: string): void {
     const peer = this.peers.get(peerId);
     if (peer) {
-      console.log(`[WebRTCManager] 피어(${peerId}) 제거.`);
       peer.destroy();
       this.peers.delete(peerId);
     }
   }
   
-  public sendToAllPeers(message: any): number {
-    let sentCount = 0;
+  public sendToAllPeers(message: any): { successful: string[], failed: string[] } {
+    const successful: string[] = [];
+    const failed: string[] = [];
     this.peers.forEach((peer, peerId) => {
-      if (peer.connected) {
+      if (peer.connected && !peer.destroyed) {
         try {
           peer.send(message);
-          sentCount++;
+          successful.push(peerId);
         } catch (error) {
-          console.error(`[WebRTCManager] 피어(${peerId})에게 데이터 전송 실패:`, error);
+          // 2. 가장 낮은 레벨에서 에러를 잡고, 실패 목록에 추가
+          console.warn(`[WebRTCManager] Failed to send data to peer (${peerId}):`, error);
+          failed.push(peerId);
         }
       }
     });
-    return sentCount;
+    return { successful, failed };
   }
 
   public replaceTrack(oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack, stream: MediaStream): void {
-    console.log(`[WebRTCManager] 모든 피어의 미디어 트랙 교체: ${oldTrack.kind}`);
     this.peers.forEach(peer => {
-      peer.replaceTrack(oldTrack, newTrack, stream);
+      if (!peer.destroyed) peer.replaceTrack(oldTrack, newTrack, stream);
     });
   }
   
   public getConnectedPeerIds(): string[] {
-    return Array.from(this.peers.entries())
-      .filter(([, peer]) => peer.connected)
-      .map(([peerId]) => peerId);
+    return Array.from(this.peers.keys()).filter(peerId => this.peers.get(peerId)?.connected && !this.peers.get(peerId)?.destroyed);
   }
 
-  public getMainPeer() {
-    const firstPeer = this.peers.values().next().value;
-    return firstPeer || null;
-  }
-
-  public getPeerDataChannelBuffer(peerId: string) {
+  public getPeerDataChannelBuffer(peerId: string): number {
     const peer = this.peers.get(peerId);
-    if (peer && (peer as any).dataChannel) {
-      const dataChannel = (peer as any).dataChannel;
-      return dataChannel.bufferedAmount || 0;
+    if (peer && (peer as any)._channel && !peer.destroyed) {
+      return (peer as any)._channel.bufferedAmount || 0;
     }
     return 0;
   }
 
-  public getAnyPeerWithBufferData() {
-    for (const [peerId, peer] of this.peers.entries()) {
-      if ((peer as any).dataChannel) {
-        const dataChannel = (peer as any).dataChannel;
-        if (dataChannel.bufferedAmount > 0) {
-          return { peerId, peer, bufferedAmount: dataChannel.bufferedAmount };
-        }
-      }
-    }
-    return null;
-  }
-
   public hasPeer(peerId: string): boolean {
-    return this.peers.has(peerId);
+    return this.peers.has(peerId) && !this.peers.get(peerId)?.destroyed;
   }
 
   public destroyAll(): void {
-    console.log('[WebRTCManager] 모든 피어 연결 파괴.');
     this.peers.forEach(peer => peer.destroy());
     this.peers.clear();
   }

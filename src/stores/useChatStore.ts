@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { produce } from 'immer';
 import { useWhiteboardStore } from './useWhiteboardStore';
 import { initDB, saveChunk, getAndAssembleFile, deleteFileChunks } from '@/lib/indexedDBHelper';
+import { usePeerConnectionStore } from './usePeerConnectionStore';
 
 export interface FileMetadata {
   transferId: string;
@@ -49,7 +50,7 @@ interface ChatActions {
   addPendingChunk: (peerId: string, chunk: ArrayBuffer) => void;
   processPendingChunks: (peerId: string, transferId: string) => Promise<void>;
   handleIncomingChunk: (peerId: string, receivedData: ArrayBuffer | Uint8Array) => Promise<void>;
-  checkAndAssembleIfComplete: (transferId: string) => void; // setTimeout을 사용하므로 Promise를 반환하지 않음
+  checkAndAssembleIfComplete: (transferId: string) => void;
   setTypingState: (userId: string, nickname: string, isTyping: boolean) => void;
   applyRemoteDrawEvent: (event: any) => void;
   clearChat: () => void;
@@ -152,10 +153,14 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
       }));
   },
   
-  // =================▼▼▼ 최종 수정 지점 ▼▼▼=================
   appendFileChunk: async (transferId, index, chunk, isLastChunk = false) => {
     if (!isLastChunk) {
       await saveChunk(transferId, index, chunk);
+      const { sendToAllPeers } = usePeerConnectionStore.getState();
+      sendToAllPeers(JSON.stringify({
+          type: 'file-ack',
+          payload: { transferId, chunkIndex: index }
+      }));
     }
 
     set(produce((state: ChatState) => {
@@ -174,13 +179,10 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
       }
     }));
     
-    // 상태 업데이트가 배치 처리된 후 실행되도록 스케줄링합니다.
     get().checkAndAssembleIfComplete(transferId);
   },
 
   checkAndAssembleIfComplete: (transferId) => {
-    // 현재 이벤트 루프의 모든 동기적 코드가 실행된 후, 이 코드를 실행합니다.
-    // 이를 통해 Zustand의 배치 업데이트가 완료될 시간을 확보합니다.
     setTimeout(async () => {
       const state = get();
       const transfer = state.fileTransfers.get(transferId);
@@ -209,7 +211,6 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
       }
     }, 0);
   },
-  // =================▲▲▲ 최종 수정 지점 ▲▲▲=================
 
   setTypingState: (userId, nickname, isTyping) => set(produce((state: ChatState) => {
     if (isTyping) { state.isTyping.set(userId, nickname); } 

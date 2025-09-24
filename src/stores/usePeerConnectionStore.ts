@@ -3,7 +3,12 @@ import { produce } from 'immer';
 import { WebRTCManager } from '@/services/webrtc';
 import type { SignalData } from 'simple-peer';
 import { useSignalingStore } from './useSignalingStore';
-import { useChatStore } from './useChatStore';
+
+// useChatStore의 순환 참조를 피하기 위해 동적으로 import 합니다.
+let useChatStore: any;
+import('./useChatStore').then(mod => {
+  useChatStore = mod.useChatStore;
+});
 
 export interface PeerState {
   userId: string;
@@ -24,6 +29,7 @@ interface PeerConnectionState {
   webRTCManager: WebRTCManager | null;
   localStream?: MediaStream;
   peers: Map<string, PeerState>;
+  pendingAcks: Map<string, () => void>; // ACK를 기다리는 Promise의 resolve 함수들을 저장
 }
 
 interface PeerConnectionActions {
@@ -31,203 +37,153 @@ interface PeerConnectionActions {
     createPeer: (userId: string, nickname: string, initiator: boolean) => void;
     receiveSignal: (from: string, nickname: string, signal: SignalData) => void;
     removePeer: (userId: string) => void;
-    sendToAllPeers: (message: any) => number;
+    sendToAllPeers: (message: any) => { successful: string[], failed: string[] };
     replaceTrack: (oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack, stream: MediaStream) => void;
-    sendFile: (file: File) => void;
+    sendFile: (file: File) => Promise<void>;
     cleanup: () => void;
     updatePeerMediaState: (userId: string, kind: 'audio' | 'video', enabled: boolean) => void;
+    resolveAck: (transferId: string, chunkIndex: number) => void; // ACK 수신 시 호출될 액션
 }
 
 const FILE_CHUNK_SIZE = 64 * 1024;
-// 데이터 채널의 버퍼가 이 값 이상으로 쌓이면 전송을 일시 중지합니다.
-const DATA_CHANNEL_BUFFER_THRESHOLD = 256 * 1024; // 256KB로 낮춰 더 민감하게 반응하도록 설정
 
 export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectionActions>((set, get) => ({
   webRTCManager: null,
   peers: new Map(),
+  pendingAcks: new Map(),
 
   initialize: (localStream, events) => {
-    console.log('[PEER_CONNECTION]  WebRTC   .');
     const webRTCManager = new WebRTCManager(localStream, {
-      onSignal: (peerId, signal) => {
-        console.log(`[PEER_CONNECTION]  WebRTC    (${peerId}) .`);
-        useSignalingStore.getState().sendSignal(peerId, signal);
-      },
-      onConnect: (peerId) => {
-        console.log(`[PEER_CONNECTION]  (${peerId}) P2P  .`);
-        set(produce(state => {
-          const peer = state.peers.get(peerId);
-          if (peer) peer.connectionState = 'connected';
-        }));
-      },
-      onStream: (peerId, stream) => {
-        console.log(`[PEER_CONNECTION]  (${peerId})   .`);
-        set(produce(state => {
-          const peer = state.peers.get(peerId);
-          if (peer) peer.stream = stream;
-        }));
-      },
+      onSignal: (peerId, signal) => useSignalingStore.getState().sendSignal(peerId, signal),
+      onConnect: (peerId) => set(produce(state => { if (state.peers.has(peerId)) state.peers.get(peerId)!.connectionState = 'connected'; })),
+      onStream: (peerId, stream) => set(produce(state => { if (state.peers.has(peerId)) state.peers.get(peerId)!.stream = stream; })),
       onData: events.onData,
-      onClose: (peerId) => {
-        console.log(`[PEER_CONNECTION]  (${peerId})  .`);
-        get().removePeer(peerId);
-      },
+      onClose: (peerId) => get().removePeer(peerId),
       onError: (peerId, error) => {
-        console.error(`[PEER_CONNECTION]  (${peerId})    :`, error);
-        set(produce(state => {
-          const peer = state.peers.get(peerId);
-          if (peer) peer.connectionState = 'failed';
-        }));
+        if (error.name === 'OperationError') {
+            console.warn(`[PEER_CONNECTION] Non-fatal OperationError on peer (${peerId}). Flow control will handle it. Error: ${error.message}`);
+            return;
+        }
+        console.error(`[PEER_CONNECTION] Unrecoverable fatal error on peer (${peerId}), removing peer:`, error);
+        get().removePeer(peerId);
       },
     });
     set({ webRTCManager, localStream });
   },
 
   createPeer: (userId, nickname, initiator) => {
-    console.log(`[PEER_CONNECTION]  WebRTC (${userId})  (Initiator: ${initiator})`);
     get().webRTCManager?.createPeer(userId, initiator);
-    set(produce(state => {
-      state.peers.set(userId, { userId, nickname, audioEnabled: true, videoEnabled: true, isSharingScreen: false, connectionState: 'connecting' });
-    }));
+    set(produce(state => { state.peers.set(userId, { userId, nickname, audioEnabled: true, videoEnabled: true, isSharingScreen: false, connectionState: 'connecting' }); }));
   },
   
   receiveSignal: (from, nickname, signal) => {
     const { webRTCManager, peers } = get();
     if (!webRTCManager) return;
-    
-    console.log(`[PEER_CONNECTION]  (${from})  .`);
-
     if (peers.has(from)) {
        webRTCManager.signalPeer(from, signal);
     } else {
-      console.warn(`[PEER_CONNECTION] :  ,     (${from}).      .`);
-      set(produce(state => {
-        state.peers.set(from, { userId: from, nickname, audioEnabled: true, videoEnabled: true, isSharingScreen: false, connectionState: 'connecting' });
-      }));
-      webRTCManager.receiveSignal(from, signal);
+      const peer = webRTCManager.createPeer(from, false);
+      peer.signal(signal);
+      set(produce(state => { state.peers.set(from, { userId: from, nickname, audioEnabled: true, videoEnabled: true, isSharingScreen: false, connectionState: 'connecting' }); }));
     }
   },
 
   removePeer: (userId) => {
     get().webRTCManager?.removePeer(userId);
-    set(produce(state => {
-      state.peers.delete(userId);
-    }));
+    set(produce(state => { state.peers.delete(userId); }));
   },
 
-  sendToAllPeers: (message) => {
-    let messageType = 'binary_chunk';
-    if (typeof message === 'string') {
-        try {
-            const parsed = JSON.parse(message);
-            messageType = parsed.type || 'json_string';
-        } catch (e) {
-            messageType = 'text_string';
-        }
+  sendToAllPeers: (message) => get().webRTCManager?.sendToAllPeers(message) ?? { successful: [], failed: [] },
+
+  replaceTrack: (oldTrack, newTrack, stream) => get().webRTCManager?.replaceTrack(oldTrack, newTrack, stream),
+
+  resolveAck: (transferId, chunkIndex) => {
+    const key = `${transferId}-${chunkIndex}`;
+    const resolve = get().pendingAcks.get(key);
+    if (resolve) {
+      resolve();
+      set(produce(state => { state.pendingAcks.delete(key); }));
     }
-    
-    const sentCount = get().webRTCManager?.sendToAllPeers(message) ?? 0;
-    
-    if (sentCount > 0 && messageType !== 'binary_chunk') {
-        console.log(`[WebRTCManager]  [${messageType}]   ${sentCount}  .`);
-    }
-    return sentCount;
   },
 
-   replaceTrack: (oldTrack, newTrack, stream) => {
-     const { webRTCManager } = get();
-     if (webRTCManager) {
-       webRTCManager.replaceTrack(oldTrack, newTrack, stream);
-     }
-   },
-
-  // =================▼▼▼ 최종 수정 지점: 지능형 유량 제어 로직 ▼▼▼=================
-  sendFile: (file: File) => {
-    const { webRTCManager } = get();
+  sendFile: async (file: File) => {
+    const { webRTCManager, sendToAllPeers } = get();
     const { addFileMessage, updateFileProgress } = useChatStore.getState();
-    if (!webRTCManager) {
-        console.error("[FILE_TRANSFER] WebRTCManager  .");
-        return;
-    }
+
+    if (!webRTCManager) { console.error("[FILE_TRANSFER] WebRTCManager is not initialized."); return; }
+    if (!FileReader) { alert("Your browser does not support FileReader API needed for this transfer method."); return; }
 
     const totalChunks = Math.ceil(file.size / FILE_CHUNK_SIZE);
     const transferId = `${file.name}-${file.size}-${Date.now()}`;
     const fileMeta = { transferId, name: file.name, size: file.size, type: file.type, totalChunks };
 
-    addFileMessage('local-user', 'You', fileMeta, true);
-    
-    const metaMessage = JSON.stringify({ type: 'file-meta', payload: fileMeta });
-    webRTCManager.sendToAllPeers(metaMessage);
+    await addFileMessage('local-user', 'You', fileMeta, true);
+    sendToAllPeers(JSON.stringify({ type: 'file-meta', payload: fileMeta }));
 
     const reader = new FileReader();
     reader.readAsArrayBuffer(file);
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
         const buffer = e.target?.result as ArrayBuffer;
         if (!buffer) return;
 
-        let offset = 0;
-        let chunkIndex = 0;
-
-        const sendChunkLoop = () => {
-            if (offset >= buffer.byteLength) {
-                const endHeader = new ArrayBuffer(5);
-                const endView = new DataView(endHeader);
-                endView.setUint8(0, 2);
-                webRTCManager.sendToAllPeers(endHeader);
-                console.log(`[FILE_TRANSFER]    : ${transferId}`);
-                updateFileProgress(transferId, buffer.byteLength); // 전송 완료 시 100%로 설정
-                return;
-            }
-
-            // 연결된 모든 피어의 버퍼를 확인합니다.
-            const connectedPeerIds = webRTCManager.getConnectedPeerIds();
-            if (connectedPeerIds.length === 0) {
-                console.warn("[FILE_TRANSFER] No connected peers to send file to. Aborting.");
-                return;
-            }
-
-            // 모든 피어의 버퍼가 임계값 이하일 때만 전송합니다.
-            let canSend = true;
-            for (const peerId of connectedPeerIds) {
-                const bufferedAmount = webRTCManager.getPeerDataChannelBuffer(peerId);
-                if (bufferedAmount > DATA_CHANNEL_BUFFER_THRESHOLD) {
-                    console.log(`[FILE_TRANSFER] Peer ${peerId} buffer is full (${bufferedAmount} bytes). Pausing.`);
-                    canSend = false;
-                    break;
+        try {
+            for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                if (get().webRTCManager?.getConnectedPeerIds().length === 0) {
+                    console.warn("[FILE_TRANSFER] Connection lost. Aborting.");
+                    // 진행 중인 모든 ACK 대기 취소
+                    get().pendingAcks.forEach(resolve => resolve());
+                    set(produce(state => { state.pendingAcks.clear(); }));
+                    return;
                 }
-            }
-            
-            if (canSend) {
+                const offset = chunkIndex * FILE_CHUNK_SIZE;
                 const chunk = buffer.slice(offset, offset + FILE_CHUNK_SIZE);
-                const header = new ArrayBuffer(5);
-                const headerView = new DataView(header);
-                headerView.setUint8(0, 1);
-                headerView.setUint32(1, chunkIndex);
 
+                const header = new ArrayBuffer(5);
+                new DataView(header).setUint8(0, 1);
+                new DataView(header).setUint32(1, chunkIndex);
                 const combined = new Uint8Array(header.byteLength + chunk.byteLength);
                 combined.set(new Uint8Array(header), 0);
                 combined.set(new Uint8Array(chunk), header.byteLength);
                 
-                webRTCManager.sendToAllPeers(combined.buffer);
+                const ackPromise = new Promise<void>((resolve, reject) => {
+                    const key = `${transferId}-${chunkIndex}`;
+                    const timeoutId = setTimeout(() => {
+                        reject(new Error(`ACK timeout for chunk ${chunkIndex}`));
+                        set(produce(state => { state.pendingAcks.delete(key); }));
+                    }, 15000);
+
+                    set(produce(state => {
+                        state.pendingAcks.set(key, () => {
+                            clearTimeout(timeoutId);
+                            resolve();
+                        });
+                    }));
+                });
+
+                sendToAllPeers(combined.buffer);
                 
-                offset += chunk.byteLength;
-                chunkIndex++;
-                updateFileProgress(transferId, offset);
+                await ackPromise;
+                
+                updateFileProgress(transferId, offset + chunk.byteLength);
             }
 
-            // setTimeout 대신 requestAnimationFrame을 사용하여 브라우저 렌더링에 맞춰 부드럽게 전송합니다.
-            requestAnimationFrame(sendChunkLoop);
-        };
-        
-        requestAnimationFrame(sendChunkLoop);
+            const endHeader = new ArrayBuffer(1);
+            new DataView(endHeader).setUint8(0, 2);
+            sendToAllPeers(endHeader);
+            console.log(`[FILE_TRANSFER] All chunks sent for: ${transferId}`);
+
+        } catch (error) {
+            console.error("[FILE_TRANSFER] Transfer failed:", error);
+        }
+    };
+    reader.onerror = (error) => {
+        console.error("[FILE_TRANSFER] FileReader error:", error);
     };
   },
-  // =================▲▲▲ 최종 수정 지점 ▲▲▲=================
-
+  
   cleanup: () => {
-    console.log('[PEER_CONNECTION]   WebRTC    .');
     get().webRTCManager?.destroyAll();
-    set({ webRTCManager: null, peers: new Map() });
+    set({ webRTCManager: null, peers: new Map(), pendingAcks: new Map() });
   },
 
   updatePeerMediaState: (userId, kind, enabled) => {
