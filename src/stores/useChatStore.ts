@@ -1,12 +1,14 @@
-import { create, StoreApi } from 'zustand';
+import { create } from 'zustand';
 import { produce } from 'immer';
 import { useWhiteboardStore } from './useWhiteboardStore';
+import { initDB, saveChunk, getAndAssembleFile, deleteFileChunks } from '@/lib/indexedDBHelper';
 
 export interface FileMetadata {
   transferId: string;
   name: string;
   size: number;
   type: string;
+  totalChunks: number;
 }
 
 export interface FileTransferProgress {
@@ -15,6 +17,9 @@ export interface FileTransferProgress {
   isReceiving: boolean;
   isComplete: boolean;
   blobUrl?: string;
+  senderId: string;
+  receivedChunks: Set<number>;
+  endSignalReceived: boolean;
 }
 
 export type MessageType = 'text' | 'file';
@@ -29,129 +34,195 @@ export interface ChatMessage {
   timestamp: number;
 }
 
-// ✅ 수정: Zustand 상태와 분리하여 관리할 비-렌더링 상태
-const nonReactiveState = {
-  receivedFileChunks: new Map<string, ArrayBuffer[]>(),
-  lastProgressUpdate: new Map<string, number>(),
-};
-
 interface ChatState {
   chatMessages: ChatMessage[];
   isTyping: Map<string, string>;
   fileTransfers: Map<string, FileTransferProgress>;
+  pendingChunks: Map<string, ArrayBuffer[]>;
 }
 
 interface ChatActions {
   addMessage: (message: ChatMessage) => void;
-  addFileMessage: (senderId: string, senderNickname: string, fileMeta: FileMetadata, isLocal?: boolean) => void;
+  addFileMessage: (senderId: string, senderNickname: string, fileMeta: FileMetadata, isLocal?: boolean) => Promise<void>;
   updateFileProgress: (transferId: string, loaded: number) => void;
-  appendFileChunk: (transferId: string, chunk: ArrayBuffer, isLast: boolean) => void;
+  appendFileChunk: (transferId: string, index: number, chunk: ArrayBuffer, isLastChunk?: boolean) => Promise<void>;
+  addPendingChunk: (peerId: string, chunk: ArrayBuffer) => void;
+  processPendingChunks: (peerId: string, transferId: string) => Promise<void>;
+  handleIncomingChunk: (peerId: string, receivedData: ArrayBuffer | Uint8Array) => Promise<void>;
+  checkAndAssembleIfComplete: (transferId: string) => void; // setTimeout을 사용하므로 Promise를 반환하지 않음
   setTypingState: (userId: string, nickname: string, isTyping: boolean) => void;
   applyRemoteDrawEvent: (event: any) => void;
   clearChat: () => void;
 }
 
-const PROGRESS_UPDATE_THROTTLE = 100;
-
 export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
   chatMessages: [],
   isTyping: new Map(),
   fileTransfers: new Map(),
+  pendingChunks: new Map(),
+
+  handleIncomingChunk: async (peerId, receivedData) => {
+    const chunkBuffer = (receivedData instanceof Uint8Array)
+        ? receivedData.slice().buffer
+        : receivedData;
+
+    if (!(chunkBuffer instanceof ArrayBuffer) || chunkBuffer.byteLength < 1) {
+        return;
+    }
+
+    const { fileTransfers, chatMessages, appendFileChunk, addPendingChunk } = get();
+    const receivingTransfer = Array.from(fileTransfers.entries()).find(([transferId, v]) => {
+        const message = chatMessages.find(m => m.id === transferId);
+        return message && message.senderId === peerId && v.isReceiving && !v.isComplete;
+    });
+
+    if (receivingTransfer) {
+        const transferId = receivingTransfer[0];
+        const view = new DataView(chunkBuffer);
+        const type = view.getUint8(0);
+
+        if (type === 1 && chunkBuffer.byteLength >= 5) {
+            const index = view.getUint32(1);
+            const chunk = chunkBuffer.slice(5);
+            await appendFileChunk(transferId, index, chunk, false);
+        } else if (type === 2) {
+            await appendFileChunk(transferId, -1, new ArrayBuffer(0), true);
+        }
+    } else {
+        addPendingChunk(peerId, chunkBuffer);
+    }
+  },
+
+  addPendingChunk: (peerId, chunk) => set(produce((state: ChatState) => {
+    if (!state.pendingChunks.has(peerId)) {
+      state.pendingChunks.set(peerId, []);
+    }
+    state.pendingChunks.get(peerId)!.push(chunk);
+  })),
+
+  processPendingChunks: async (peerId, transferId) => {
+    const pending = get().pendingChunks.get(peerId);
+    if (pending && pending.length > 0) {
+      for (const chunkBuffer of pending) {
+        const view = new DataView(chunkBuffer);
+        const type = view.getUint8(0);
+        if (type === 1 && chunkBuffer.byteLength >= 5) {
+          const index = view.getUint32(1);
+          const chunk = chunkBuffer.slice(5);
+          await get().appendFileChunk(transferId, index, chunk, false);
+        } else if (type === 2) {
+          await get().appendFileChunk(transferId, -1, new ArrayBuffer(0), true);
+        }
+      }
+      set(produce((state: ChatState) => { state.pendingChunks.delete(peerId); }));
+    }
+  },
+
+  addFileMessage: async (senderId, senderNickname, fileMeta, isLocal = false) => {
+    set(produce((state: ChatState) => {
+      const newFileMessage: ChatMessage = { id: fileMeta.transferId, type: 'file', fileMeta, senderId, senderNickname, timestamp: Date.now() };
+      if (!state.chatMessages.some(msg => msg.id === newFileMessage.id)) {
+        state.chatMessages.push(newFileMessage);
+      }
+      state.fileTransfers.set(fileMeta.transferId, {
+        progress: 0, isSending: isLocal, isReceiving: !isLocal, isComplete: false,
+        senderId, receivedChunks: new Set(), endSignalReceived: false,
+      });
+    }));
+    
+    if (!isLocal) {
+      await initDB();
+      await get().processPendingChunks(senderId, fileMeta.transferId);
+    }
+  },
 
   addMessage: (message) => set(produce((state: ChatState) => {
     if (!state.chatMessages.some((msg) => msg.id === message.id)) {
       state.chatMessages.push(message);
     }
   })),
-
-  addFileMessage: (senderId, senderNickname, fileMeta, isLocal = false) => {
-    set(produce((state: ChatState) => {
-      const newFileMessage: ChatMessage = { id: fileMeta.transferId, type: 'file', fileMeta, senderId, senderNickname, timestamp: Date.now() };
-      state.chatMessages.push(newFileMessage);
-      state.fileTransfers.set(fileMeta.transferId, { progress: 0, isSending: isLocal, isReceiving: !isLocal, isComplete: false });
-    }));
-    // ✅ 수정: 비-반응형 상태에 초기화
-    if (!isLocal) {
-      nonReactiveState.receivedFileChunks.set(fileMeta.transferId, []);
-    }
-    nonReactiveState.lastProgressUpdate.set(fileMeta.transferId, 0);
-  },
-
+  
   updateFileProgress: (transferId, loaded) => {
-    const now = Date.now();
-    const lastUpdate = nonReactiveState.lastProgressUpdate.get(transferId) || 0;
-    const message = get().chatMessages.find((m) => m.id === transferId);
-    const isLast = message?.fileMeta ? loaded >= message.fileMeta.size : false;
-
-    if (now - lastUpdate > PROGRESS_UPDATE_THROTTLE || isLast) {
-      nonReactiveState.lastProgressUpdate.set(transferId, now);
       set(produce((state) => {
         const transfer = state.fileTransfers.get(transferId);
+        const message = state.chatMessages.find((m) => m.id === transferId);
         if (transfer && message?.fileMeta) {
           transfer.progress = loaded / message.fileMeta.size;
         }
       }));
-    }
   },
   
-  // ✅ 수정: 'set' 호출을 최소화하는 새로운 로직
-  appendFileChunk: (transferId, chunk, isLast) => {
-    const now = Date.now();
-    const lastUpdate = nonReactiveState.lastProgressUpdate.get(transferId) || 0;
-    
-    // 1. 청크를 비-반응형 상태에만 축적
-    const chunks = nonReactiveState.receivedFileChunks.get(transferId);
-    if (!chunks) return;
-    chunks.push(chunk);
-
-    const message = get().chatMessages.find((m) => m.id === transferId);
-    if (!message?.fileMeta) return;
-
-    // 2. UI 업데이트가 필요한 시점에만 'set' 호출
-    if (isLast || now - lastUpdate > PROGRESS_UPDATE_THROTTLE) {
-      nonReactiveState.lastProgressUpdate.set(transferId, now);
-      
-      set(produce((state) => {
-        const transfer = state.fileTransfers.get(transferId);
-        if (!transfer) return;
-
-        const loadedSize = chunks.reduce((acc, c) => acc + c.byteLength, 0);
-        transfer.progress = loadedSize / (message.fileMeta?.size || 1);
-
-        if (isLast) {
-          const receivedBlob = new Blob(chunks, { type: message.fileMeta?.type });
-          transfer.isComplete = true;
-          transfer.isReceiving = false;
-          transfer.blobUrl = URL.createObjectURL(receivedBlob);
-          // 3. 완료 후 비-반응형 상태 정리
-          nonReactiveState.receivedFileChunks.delete(transferId);
-          nonReactiveState.lastProgressUpdate.delete(transferId);
-        }
-      }));
+  // =================▼▼▼ 최종 수정 지점 ▼▼▼=================
+  appendFileChunk: async (transferId, index, chunk, isLastChunk = false) => {
+    if (!isLastChunk) {
+      await saveChunk(transferId, index, chunk);
     }
+
+    set(produce((state: ChatState) => {
+      const transfer = state.fileTransfers.get(transferId);
+      if (!transfer) return;
+
+      if (isLastChunk) {
+        transfer.endSignalReceived = true;
+      } else {
+        transfer.receivedChunks.add(index);
+      }
+
+      const message = state.chatMessages.find(m => m.id === transferId);
+      if (message?.fileMeta) {
+        transfer.progress = transfer.receivedChunks.size / message.fileMeta.totalChunks;
+      }
+    }));
+    
+    // 상태 업데이트가 배치 처리된 후 실행되도록 스케줄링합니다.
+    get().checkAndAssembleIfComplete(transferId);
   },
 
+  checkAndAssembleIfComplete: (transferId) => {
+    // 현재 이벤트 루프의 모든 동기적 코드가 실행된 후, 이 코드를 실행합니다.
+    // 이를 통해 Zustand의 배치 업데이트가 완료될 시간을 확보합니다.
+    setTimeout(async () => {
+      const state = get();
+      const transfer = state.fileTransfers.get(transferId);
+      const message = state.chatMessages.find(m => m.id === transferId);
+
+      if (!transfer || !message?.fileMeta || transfer.isComplete) {
+        return;
+      }
+
+      if (transfer.endSignalReceived && transfer.receivedChunks.size === message.fileMeta.totalChunks) {
+        console.log(`[FILE_RECEIVE] All conditions met! Assembling file: ${transferId}`);
+        
+        const blob = await getAndAssembleFile(transferId, message.fileMeta.type);
+        if (blob) {
+          set(produce(s => {
+            const t = s.fileTransfers.get(transferId);
+            if (t) {
+              t.isComplete = true;
+              t.isReceiving = false;
+              t.blobUrl = URL.createObjectURL(blob);
+              t.progress = 1;
+            }
+          }));
+        }
+        await deleteFileChunks(transferId);
+      }
+    }, 0);
+  },
+  // =================▲▲▲ 최종 수정 지점 ▲▲▲=================
+
   setTypingState: (userId, nickname, isTyping) => set(produce((state: ChatState) => {
-    if (isTyping) {
-      state.isTyping.set(userId, nickname);
-    } else {
-      state.isTyping.delete(userId);
-    }
+    if (isTyping) { state.isTyping.set(userId, nickname); } 
+    else { state.isTyping.delete(userId); }
   })),
   
   applyRemoteDrawEvent: (event) => {
-    const { applyRemoteDrawEvent: applyToWhiteboard } = useWhiteboardStore.getState();
-    applyToWhiteboard(event);
+    useWhiteboardStore.getState().applyRemoteDrawEvent(event);
   },
 
   clearChat: () => {
     set({ 
-      chatMessages: [], 
-      isTyping: new Map(), 
-      fileTransfers: new Map(),
+      chatMessages: [], isTyping: new Map(), fileTransfers: new Map(), pendingChunks: new Map(),
     });
-    // ✅ 수정: 비-반응형 상태도 초기화
-    nonReactiveState.receivedFileChunks.clear();
-    nonReactiveState.lastProgressUpdate.clear();
   },
 }));

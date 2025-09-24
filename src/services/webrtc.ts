@@ -20,7 +20,6 @@ export class WebRTCManager {
     this.events = events;
   }
 
-  // ✅ 수정: initiator 플래그를 인자로 받음
   public createPeer(peerId: string, initiator: boolean): void {
     console.log(`[WebRTCManager] 피어 생성 요청 (ID: ${peerId}, Initiator: ${initiator})`);
     const peer = new Peer({
@@ -33,7 +32,6 @@ export class WebRTCManager {
     this.peers.set(peerId, peer);
   }
 
-  // ✅ 수정: 이 함수는 이제 initiator가 false일 때만 호출됨
   public receiveSignal(peerId: string, signal: SignalData): void {
     console.log(`[WebRTCManager] Non-initiator 피어(${peerId})를 위한 시그널 수신 및 처리.`);
     const peer = new Peer({
@@ -77,8 +75,6 @@ export class WebRTCManager {
         }
       }
     });
-    // ✅ 수정: 이 로그는 usePeerConnectionStore로 이동했으므로 여기서는 제거하여 중복을 피합니다.
-    // if (sentCount > 0) { ... }
     return sentCount;
   }
 
@@ -93,6 +89,32 @@ export class WebRTCManager {
     return Array.from(this.peers.entries())
       .filter(([, peer]) => peer.connected)
       .map(([peerId]) => peerId);
+  }
+
+  public getMainPeer() {
+    const firstPeer = this.peers.values().next().value;
+    return firstPeer || null;
+  }
+
+  public getPeerDataChannelBuffer(peerId: string) {
+    const peer = this.peers.get(peerId);
+    if (peer && (peer as any).dataChannel) {
+      const dataChannel = (peer as any).dataChannel;
+      return dataChannel.bufferedAmount || 0;
+    }
+    return 0;
+  }
+
+  public getAnyPeerWithBufferData() {
+    for (const [peerId, peer] of this.peers.entries()) {
+      if ((peer as any).dataChannel) {
+        const dataChannel = (peer as any).dataChannel;
+        if (dataChannel.bufferedAmount > 0) {
+          return { peerId, peer, bufferedAmount: dataChannel.bufferedAmount };
+        }
+      }
+    }
+    return null;
   }
 
   public hasPeer(peerId: string): boolean {
