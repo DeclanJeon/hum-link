@@ -122,6 +122,9 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
       },
       onChatMessage: (message: any) => { /* Not used in P2P */ },
       onData: (data: SignalingDataPayload) => { /* Not used in P2P */ },
+      onRoomCreated: (roomInfo: any) => { /* Room broadcast handler */ },
+      onRoomUpdated: (roomInfo: any) => { /* Room broadcast handler */ },
+      onRoomDeleted: (roomId: string) => { /* Room broadcast handler */ },
     };
 
     connect(roomId, userId, nickname, signalingEvents);

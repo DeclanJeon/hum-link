@@ -22,6 +22,9 @@ interface SignalingEvents {
   onMediaState: (data: { userId: string; kind: 'audio' | 'video'; enabled: boolean }) => void;
   onChatMessage: (message: ChatMessage) => void;
   onData: (data: any) => void;
+  onRoomCreated: (roomInfo: any) => void;
+  onRoomUpdated: (roomInfo: any) => void;
+  onRoomDeleted: (roomId: string) => void;
 }
 
 interface SignalingState {
@@ -35,6 +38,7 @@ interface SignalingActions {
   emit: (event: string, data: any) => void;
   sendSignal: (to: string, data: any) => void;
   updateMediaState: (data: { kind: 'audio' | 'video'; enabled: boolean }) => void;
+  broadcastRoomInfo: (roomInfo: any) => void;
 }
 
 export const useSignalingStore = create<SignalingState & SignalingActions>((set, get) => ({
@@ -90,6 +94,15 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
         case 'file-chunk':
           events.onData(data);
           break;
+        case 'room-created':
+          events.onRoomCreated(data.roomInfo);
+          break;
+        case 'room-updated':
+          events.onRoomUpdated(data.roomInfo);
+          break;
+        case 'room-deleted':
+          events.onRoomDeleted(data.roomId);
+          break;
         default:
           console.warn(`[Signaling] Unknown message type received: ${data.type}`);
           break;
@@ -128,5 +141,9 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
 
   updateMediaState: (data) => {
     get().emit('message', { type: 'media-state-update', data });
+  },
+
+  broadcastRoomInfo: (roomInfo) => {
+    get().emit('message', { type: 'room-broadcast', roomInfo });
   },
 }));
