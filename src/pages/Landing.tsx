@@ -26,6 +26,7 @@ const Landing = () => {
   const { 
     rooms, 
     createRoom, 
+    deleteRoom,
     loadRoomsFromDB 
   } = useRoomStore();
 
@@ -184,6 +185,8 @@ const Landing = () => {
               <ActiveRoomsList 
                 rooms={rooms}
                 onJoinRoom={handleJoinRoom}
+                onDeleteRoom={deleteRoom}
+                currentUserId={nickname}
               />
             </div>
           </div>

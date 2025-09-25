@@ -30,6 +30,7 @@ interface LobbyActions {
   setSelectedAudioDevice: (deviceId: string) => void;
   setSelectedVideoDevice: (deviceId: string) => void;
   setAudioLevel: (level: number) => void;
+  updateNickname: (nickname: string) => void;
   cleanup: () => void;
 }
 
@@ -148,6 +149,14 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   },
   
   setAudioLevel: (level: number) => set({ audioLevel: level }),
+
+  updateNickname: (nickname: string) => {
+    set(state => ({
+      connectionDetails: state.connectionDetails 
+        ? { ...state.connectionDetails, nickname }
+        : null
+    }));
+  },
 
   cleanup: () => {
     const { stream, audioContext } = get();
