@@ -82,7 +82,7 @@ export const WhiteboardPanel = ({ isOpen, onClose }: WhiteboardPanelProps) => {
           <Button variant="outline" size="sm" onClick={() => clearCanvas(toast)}>
             Clear
           </Button>
-          <Button variant="outline" size="sm" onClick={() => downloadCanvas(canvasRef.current!, toast)}>
+          <Button variant="outline" size="sm" onClick={() => downloadCanvas(toast)}>
             <Download className="w-4 h-4" />
           </Button>
         </div>
@@ -93,10 +93,10 @@ export const WhiteboardPanel = ({ isOpen, onClose }: WhiteboardPanelProps) => {
         <canvas
           ref={canvasRef}
           className="w-full h-[calc(100vh-180px)] whiteboard-canvas cursor-crosshair"
-          onMouseDown={(e) => startDrawing(e, canvasRef.current!)}
-          onMouseMove={(e) => draw(e, canvasRef.current!)}
-          onMouseUp={(e) => stopDrawing(e, canvasRef.current!)}
-          onMouseLeave={(e) => stopDrawing(e, canvasRef.current!)}
+          onMouseDown={(e) => startDrawing(e)}
+          onMouseMove={(e) => draw(e)}
+          onMouseUp={(e) => stopDrawing(e)}
+          onMouseLeave={(e) => stopDrawing(e)}
           onDrop={(e) => handleDrop(e, toast)}
           onDragOver={(e) => e.preventDefault()}
         />
