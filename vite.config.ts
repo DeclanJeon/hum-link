@@ -24,6 +24,10 @@ export default defineConfig(() => ({
   define: {
     global: "globalThis",
   },
+  worker: {
+    format: 'es' as const, // ES 모듈 형식으로 워커를 번들링합니다.
+    plugins: () => [react()], // 워커 내부에서 React 구문 등을 사용해야 할 경우를 대비합니다.
+  },
   optimizeDeps: {
     include: ['simple-peer'],
   },

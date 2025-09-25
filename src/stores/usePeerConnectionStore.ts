@@ -4,7 +4,7 @@ import { WebRTCManager } from '@/services/webrtc';
 import type { SignalData } from 'simple-peer';
 import { useSignalingStore } from './useSignalingStore';
 
-// useChatStore가 순환 참조를 일으키지 않도록 동적으로 import 합니다.
+// useChatStore      import .
 let useChatStore: any;
 import('./useChatStore').then(mod => {
   useChatStore = mod.useChatStore;
@@ -29,7 +29,8 @@ interface PeerConnectionState {
   webRTCManager: WebRTCManager | null;
   localStream?: MediaStream;
   peers: Map<string, PeerState>;
-  pendingAcks: Map<string, () => void>; // ACK 대기 중인 Promise의 resolve 함수를 저장합니다.
+  // [웹 워커] 파일 전송 워커 인스턴스를 관리합니다. transferId를 키로 사용합니다.
+  workers: Map<string, Worker>;
 }
 
 interface PeerConnectionActions {
@@ -42,15 +43,15 @@ interface PeerConnectionActions {
     sendFile: (file: File) => Promise<void>;
     cleanup: () => void;
     updatePeerMediaState: (userId: string, kind: 'audio' | 'video', enabled: boolean) => void;
-    resolveAck: (transferId: string, chunkIndex: number) => void; // ACK 처리 액션
+    // [웹 워커] ACK 처리 로직은 워커로 메시지를 전달하는 역할로 변경됩니다.
+    resolveAck: (transferId: string, chunkIndex: number) => void;
 }
-
-const FILE_CHUNK_SIZE = 64 * 1024; // 64KB
 
 export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectionActions>((set, get) => ({
   webRTCManager: null,
   peers: new Map(),
-  pendingAcks: new Map(),
+  // [웹 워커] 워커 맵 초기화
+  workers: new Map(),
 
   initialize: (localStream, events) => {
     const webRTCManager = new WebRTCManager(localStream, {
@@ -97,107 +98,92 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
 
   replaceTrack: (oldTrack, newTrack, stream) => get().webRTCManager?.replaceTrack(oldTrack, newTrack, stream),
 
+  // [웹 워커] ACK 수신 시, 해당하는 워커에게 메시지를 전달합니다.
   resolveAck: (transferId, chunkIndex) => {
-    const key = `${transferId}-${chunkIndex}`;
-    const resolve = get().pendingAcks.get(key);
-    if (resolve) {
-      resolve();
-      set(produce(state => { state.pendingAcks.delete(key); }));
+    const worker = get().workers.get(transferId);
+    if (worker) {
+      worker.postMessage({
+        type: 'ack-received',
+        payload: { transferId, chunkIndex }
+      });
     }
   },
 
   // ====================================================================
-  // 🚀 대용량 파일 처리를 위해 수정된 sendFile 함수
+  // [웹 워커] sendFile 로직을 웹 워커를 사용하도록 전면 재구성합니다.
   // ====================================================================
   sendFile: async (file: File) => {
-    const { webRTCManager, sendToAllPeers } = get();
-    // useChatStore가 로드될 때까지 기다립니다.
+    const { webRTCManager, sendToAllPeers, workers } = get();
     if (!useChatStore) {
         console.error("[FILE_TRANSFER] Chat store is not ready yet.");
         return;
     }
     const { addFileMessage, updateFileProgress } = useChatStore.getState();
 
-    if (!webRTCManager) { console.error("[FILE_TRANSFER] WebRTCManager is not initialized."); return; }
+    if (!webRTCManager) {
+      console.error("[FILE_TRANSFER] WebRTCManager is not initialized.");
+      return;
+    }
 
-    const totalChunks = Math.ceil(file.size / FILE_CHUNK_SIZE);
+    const totalChunks = Math.ceil(file.size / (64 * 1024));
     const transferId = `${file.name}-${file.size}-${Date.now()}`;
     const fileMeta = { transferId, name: file.name, size: file.size, type: file.type, totalChunks };
 
     // UI에 파일 메시지를 먼저 표시합니다.
     await addFileMessage('local-user', 'You', fileMeta, true);
-    // 상대방에게 파일 전송 시작을 알리는 메타데이터를 보냅니다.
+    // 다른 피어들에게 파일 전송 시작을 알립니다.
     sendToAllPeers(JSON.stringify({ type: 'file-meta', payload: fileMeta }));
 
-    try {
-        // FileReader 대신, 파일을 청크 단위로 직접 읽는 루프를 사용합니다.
-        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-            // 연결된 피어가 없으면 전송을 중단합니다.
-            if (get().webRTCManager?.getConnectedPeerIds().length === 0) {
-                console.warn("[FILE_TRANSFER] Connection lost. Aborting.");
-                // 대기 중인 모든 ACK를 즉시 해결하여 루프를 종료합니다.
-                get().pendingAcks.forEach(resolve => resolve());
-                set(produce(state => { state.pendingAcks.clear(); }));
-                return;
-            }
-            const offset = chunkIndex * FILE_CHUNK_SIZE;
-            
-            // 1. File.slice()로 메모리 부담 없이 파일 조각(Blob)을 가져옵니다.
-            const chunkBlob = file.slice(offset, offset + FILE_CHUNK_SIZE);
-            // 2. Blob을 ArrayBuffer로 변환합니다. 이 과정은 메모리에 큰 부담을 주지 않습니다.
-            const chunkBuffer = await chunkBlob.arrayBuffer();
+    // 웹 워커를 생성하고 작업을 시작시킵니다.
+    const worker = new Worker(new URL('../workers/file.worker.ts', import.meta.url), { type: 'module' });
 
-            // 청크 데이터 앞에 타입(1)과 인덱스 헤더를 붙입니다.
-            const header = new ArrayBuffer(5);
-            new DataView(header).setUint8(0, 1); // Type 1: Data Chunk
-            new DataView(header).setUint32(1, chunkIndex);
-            
-            const combined = new Uint8Array(header.byteLength + chunkBuffer.byteLength);
-            combined.set(new Uint8Array(header), 0);
-            combined.set(new Uint8Array(chunkBuffer), header.byteLength);
-            
-            // 상대방의 ACK를 기다리는 Promise를 생성합니다.
-            const ackPromise = new Promise<void>((resolve, reject) => {
-                const key = `${transferId}-${chunkIndex}`;
-                const timeoutId = setTimeout(() => {
-                    reject(new Error(`ACK timeout for chunk ${chunkIndex}`));
-                    set(produce(state => { state.pendingAcks.delete(key); }));
-                }, 15000); // 15초 타임아웃
+    // 생성된 워커를 맵에 저장하여 관리합니다.
+    set(produce(state => { state.workers.set(transferId, worker); }));
 
-                // ACK를 받으면 호출될 resolve 함수를 저장합니다.
-                set(produce(state => {
-                    state.pendingAcks.set(key, () => {
-                        clearTimeout(timeoutId);
-                        resolve();
-                    });
-                }));
-            });
+    // 워커로부터 메시지를 수신하는 리스너를 설정합니다.
+    worker.onmessage = (event) => {
+      const { type, payload } = event.data;
+      switch (type) {
+        case 'chunk-ready':
+          // 워커가 준비한 청크를 데이터 채널로 전송합니다.
+          sendToAllPeers(payload.chunk);
+          break;
+        case 'progress-update':
+          // 워커가 보낸 진행 상황을 UI에 반영합니다.
+          updateFileProgress(payload.transferId, payload.loaded);
+          break;
+        case 'transfer-complete':
+          // 전송이 완료되면 워커를 종료하고 맵에서 제거합니다.
+          console.log(`[FILE_TRANSFER] Worker for ${payload.transferId} finished.`);
+          worker.terminate();
+          set(produce(state => { state.workers.delete(payload.transferId); }));
+          break;
+        case 'transfer-error':
+          console.error(`[FILE_TRANSFER] Error from worker for ${payload.transferId}:`, payload.error);
+          worker.terminate();
+          set(produce(state => { state.workers.delete(payload.transferId); }));
+          // 여기에 사용자에게 에러를 알리는 UI 로직(e.g., toast)을 추가할 수 있습니다.
+          break;
+      }
+    };
 
-            // 헤더가 포함된 청크를 전송합니다.
-            sendToAllPeers(combined.buffer);
-            
-            // 이 청크에 대한 ACK가 올 때까지 기다립니다.
-            await ackPromise;
-            
-            // 진행률을 업데이트합니다.
-            updateFileProgress(transferId, offset + chunkBuffer.byteLength);
-        }
+    worker.onerror = (error) => {
+        console.error(`[FILE_TRANSFER] Uncaught error in worker for ${transferId}:`, error);
+        set(produce(state => { state.workers.delete(transferId); }));
+    };
 
-        // 모든 청크 전송이 끝나면 종료 신호(타입 2)를 보냅니다.
-        const endHeader = new ArrayBuffer(1);
-        new DataView(endHeader).setUint8(0, 2); // Type 2: End of File
-        sendToAllPeers(endHeader);
-        console.log(`[FILE_TRANSFER] All chunks sent for: ${transferId}`);
-
-    } catch (error) {
-        console.error("[FILE_TRANSFER] Transfer failed:", error);
-        // 여기에 전송 실패 UI 피드백 로직을 추가할 수 있습니다. (예: toast.error)
-    }
+    // 워커에게 파일 전송 시작을 명령합니다.
+    worker.postMessage({
+      type: 'start-transfer',
+      payload: { file, transferId }
+    });
   },
   
   cleanup: () => {
     get().webRTCManager?.destroyAll();
-    set({ webRTCManager: null, peers: new Map(), pendingAcks: new Map() });
+    // [웹 워커] 정리 시 모든 활성 워커를 종료합니다.
+    get().workers.forEach(worker => worker.terminate());
+    set({ webRTCManager: null, peers: new Map(), workers: new Map() });
   },
 
   updatePeerMediaState: (userId, kind, enabled) => {
