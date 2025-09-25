@@ -11,6 +11,7 @@ import { ControlBar } from '@/components/ControlBar';
 import { ChatPanel } from '@/components/ChatPanel';
 import { WhiteboardPanel } from '@/components/WhiteboardPanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
+import { FileStreamingPanel } from '@/components/FileStreamingPanel';
 import { VideoLayout } from '@/components/VideoLayout';
 import { toast } from 'sonner';
 
@@ -98,6 +99,12 @@ const Room = () => {
       <ChatPanel isOpen={activePanel === "chat"} onClose={() => setActivePanel("chat")} />
       <WhiteboardPanel isOpen={activePanel === "whiteboard"} onClose={() => setActivePanel("whiteboard")} />
       <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel("settings")} />
+      
+      {/* File Streaming Panel 추가 */}
+      <FileStreamingPanel
+        isOpen={activePanel === "fileStreaming"}
+        onClose={() => setActivePanel("none")}
+      />
 
       <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
         <ControlBar />

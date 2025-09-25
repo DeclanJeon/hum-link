@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type ActivePanel = 'chat' | 'whiteboard' | 'settings' | 'none';
+export type ActivePanel = 'chat' | 'whiteboard' | 'settings' | 'fileStreaming' | 'none';
 export type ViewMode = 'speaker' | 'grid';
 
 interface UIManagementState {

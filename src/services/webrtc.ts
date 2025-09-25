@@ -287,9 +287,32 @@ export class WebRTCManager {
   private setupPeerEvents(peer: PeerInstance, peerId: string): void {
     peer.on('signal', (signal) => this.events.onSignal(peerId, signal));
     peer.on('connect', () => this.events.onConnect(peerId));
-    peer.on('stream', (stream) => this.events.onStream(peerId, stream));
+    peer.on('stream', (stream) => {
+      console.log(`[WebRTC] Received stream from peer ${peerId}`);
+      
+      // 스트림 타입 확인 (비디오 트랙이 있는지)
+      const videoTracks = stream.getVideoTracks();
+      const audioTracks = stream.getAudioTracks();
+      
+      if (videoTracks.length > 0) {
+        console.log(`[WebRTC] Stream contains ${videoTracks.length} video track(s)`);
+        // 파일 스트리밍 스트림인 경우
+        if (videoTracks[0].label.includes('captureStream')) {
+          console.log(`[WebRTC] Detected file streaming from peer ${peerId}`);
+          // 파일 스트리밍 알림 이벤트 발생
+          this.events.onStream(peerId, stream);
+        } else {
+          // 일반 웹캠 스트림
+          this.events.onStream(peerId, stream);
+        }
+      }
+      
+      if (audioTracks.length > 0) {
+        console.log(`[WebRTC] Stream contains ${audioTracks.length} audio track(s)`);
+      }
+    });
     peer.on('data', (data) => this.events.onData(peerId, data));
-    peer.on('close', () => this.events.onClose(peerId)); 
+    peer.on('close', () => this.events.onClose(peerId));
     peer.on('error', (err) => this.handlePeerError(peerId, err));
   }
 

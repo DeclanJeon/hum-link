@@ -1,8 +1,9 @@
 import { useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
-import { 
+import {
   Mic, MicOff, Video, VideoOff, MessageSquare, Palette,
-  MoreHorizontal, PhoneOff, Settings, LayoutGrid, ScreenShare, Captions
+  MoreHorizontal, PhoneOff, Settings, LayoutGrid, ScreenShare, Captions,
+  FileVideo
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -101,6 +102,16 @@ export const ControlBar = () => {
         className={`fab ${isSharingScreen ? "active" : ""}`}
       >
         <ScreenShare className="w-5 h-5" />
+      </Button>
+
+      {/* File Streaming Button 추가 */}
+      <Button
+        variant="secondary"
+        size="lg"
+        onClick={() => setActivePanel("fileStreaming")}
+        className={`fab ${activePanel === "fileStreaming" ? "active" : ""}`}
+      >
+        <FileVideo className="w-5 h-5" />
       </Button>
 
       {/* View Mode Menu */}

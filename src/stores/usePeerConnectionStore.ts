@@ -68,6 +68,11 @@ interface PeerConnectionActions {
   updatePeerMediaState: (userId: string, kind: 'audio' | 'video', enabled: boolean) => void;
   resolveAck: (transferId: string, chunkIndex: number) => void;
   updateTransferProgress: (transferId: string, metrics: Partial<FileTransferMetrics>) => void; // 새 메서드
+  
+  // 스트림 관련 새 액션들
+  addStreamToAllPeers: (stream: MediaStream) => Promise<void>;
+  removeStreamFromAllPeers: (stream: MediaStream) => void;
+  replaceStreamTrack: (oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack) => void;
 }
 
 export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectionActions>((set, get) => ({
@@ -172,6 +177,70 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
 
   replaceTrack: (oldTrack, newTrack, stream) => {
     get().webRTCManager?.replaceTrack(oldTrack, newTrack, stream);
+  },
+
+  addStreamToAllPeers: async (stream: MediaStream) => {
+    const { webRTCManager, peers } = get();
+    if (!webRTCManager) {
+      console.error('[STREAM] WebRTCManager not initialized');
+      return;
+    }
+
+    // 각 peer에게 스트림 추가
+    for (const [peerId, peerState] of peers) {
+      try {
+        const peer = (webRTCManager as any).peers.get(peerId);
+        if (peer && !peer.destroyed) {
+          console.log(`[STREAM] Adding stream to peer ${peerId}`);
+          
+          // Simple-peer의 addStream 메소드 사용
+          if (peer.addStream) {
+            peer.addStream(stream);
+          } else {
+            // 또는 트랙별로 추가
+            stream.getTracks().forEach(track => {
+              peer.addTrack(track, stream);
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`[STREAM] Failed to add stream to peer ${peerId}:`, error);
+      }
+    }
+    
+    console.log(`[STREAM] Stream added to ${peers.size} peers`);
+  },
+
+  removeStreamFromAllPeers: (stream: MediaStream) => {
+    const { webRTCManager, peers } = get();
+    if (!webRTCManager) return;
+
+    for (const [peerId] of peers) {
+      try {
+        const peer = (webRTCManager as any).peers.get(peerId);
+        if (peer && !peer.destroyed) {
+          console.log(`[STREAM] Removing stream from peer ${peerId}`);
+          
+          if (peer.removeStream) {
+            peer.removeStream(stream);
+          } else {
+            stream.getTracks().forEach(track => {
+              peer.removeTrack(track, stream);
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`[STREAM] Failed to remove stream from peer ${peerId}:`, error);
+      }
+    }
+  },
+
+  replaceStreamTrack: (oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack) => {
+    const { webRTCManager, localStream } = get();
+    if (!webRTCManager || !localStream) return;
+
+    webRTCManager.replaceTrack(oldTrack, newTrack, localStream);
+    console.log('[STREAM] Track replaced in all peer connections');
   },
 
   resolveAck: (transferId, chunkIndex) => {
