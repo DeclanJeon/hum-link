@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useUIManagementStore } from '@/stores/useUIManagementStore';
 import { useLobbyStore } from '@/stores/useLobbyStore';
+import { useSessionStore } from '@/stores/useSessionStore';
 import { useTranscriptionStore } from '@/stores/useTranscriptionStore';
 import { useAutoHideControls } from '@/hooks/useAutoHideControls';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
@@ -18,17 +19,20 @@ const Room = () => {
   const location = useLocation();
   const { roomTitle } = useParams<{ roomTitle: string }>();
 
-  // --- UI 상태 및 액션 ---
+  // --- UI 상태 관리 ---
   const { activePanel, showControls, setActivePanel } = useUIManagementStore();
   
-  // --- 자막 관련 상태 및 액션 ---
+  // --- 세션 정보 ---
+  const { clearSession } = useSessionStore();
+  
+  // --- 자막 관련 상태 ---
   const { isTranscriptionEnabled, transcriptionLanguage, setLocalTranscript, sendTranscription, toggleTranscription } = useTranscriptionStore();
 
-  // --- 로비에서 전달받은 데이터 ---
+  // --- 미디어 스트림 ---
   const lobbyStream = useLobbyStore((s) => s.stream);
   const { connectionDetails } = location.state || {};
   
-  // --- 핵심 로직 실행 ---
+  // --- 룸 파라미터 준비 ---
   const roomParams = useMemo(() => {
     if (roomTitle && connectionDetails && lobbyStream) {
       return {
@@ -74,6 +78,13 @@ const Room = () => {
     }
   }, [roomParams, navigate, roomTitle]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      clearSession();
+    };
+  }, [clearSession]);
+
   if (!connectionDetails) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><p>Loading...</p></div>;
   }
@@ -89,7 +100,6 @@ const Room = () => {
       <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel("settings")} />
 
       <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
-        {/* ControlBar는 이제 props가 필요 없습니다. */}
         <ControlBar />
       </div>
     </div>

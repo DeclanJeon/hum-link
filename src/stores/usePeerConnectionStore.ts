@@ -3,8 +3,10 @@ import { produce } from 'immer';
 import { WebRTCManager } from '@/services/webrtc';
 import type { SignalData } from 'simple-peer';
 import { useSignalingStore } from './useSignalingStore';
+import { useSessionStore } from './useSessionStore';
 import { calculateOptimalChunkSize, calculateTotalChunks, isValidFileType, isValidFileSize } from '@/lib/fileTransferUtils';
 import { useChatStore } from './useChatStore';
+import { toast } from 'sonner';
 
 export interface PeerState {
   userId: string;
@@ -21,19 +23,26 @@ interface PeerConnectionEvents {
   onData: (peerId: string, data: any) => void;
 }
 
+interface FileTransferMetrics {
+  progress: number;
+  sendProgress: number;
+  speed: number;
+  sendSpeed: number;
+  chunksAcked: number;
+  chunksSent: number;
+  totalChunks: number;
+  windowSize: number;
+  inFlight: number;
+  lastUpdateTime?: number; // 추가
+}
+
 interface FileTransferState {
   transferId: string;
   file: File;
   worker: Worker;
   isPaused: boolean;
   startTime: number;
-  metrics?: {
-    progress: number;
-    speed: number;
-    chunksAcked: number;
-    totalChunks: number;
-    windowSize: number;
-  };
+  metrics: FileTransferMetrics;
 }
 
 interface PeerConnectionState {
@@ -49,6 +58,7 @@ interface PeerConnectionActions {
   receiveSignal: (from: string, nickname: string, signal: SignalData) => void;
   removePeer: (userId: string) => void;
   sendToAllPeers: (message: any) => { successful: string[], failed: string[] };
+  sendToPeer: (peerId: string, message: any) => boolean;
   replaceTrack: (oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack, stream: MediaStream) => void;
   sendFile: (file: File) => Promise<void>;
   cancelFileTransfer: (transferId: string) => void;
@@ -57,10 +67,12 @@ interface PeerConnectionActions {
   cleanup: () => void;
   updatePeerMediaState: (userId: string, kind: 'audio' | 'video', enabled: boolean) => void;
   resolveAck: (transferId: string, chunkIndex: number) => void;
+  updateTransferProgress: (transferId: string, metrics: Partial<FileTransferMetrics>) => void; // 새 메서드
 }
 
 export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectionActions>((set, get) => ({
   webRTCManager: null,
+  localStream: null,
   peers: new Map(),
   activeTransfers: new Map(),
 
@@ -92,7 +104,7 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         }));
       },
       onBufferLow: (peerId) => {
-        console.log(`[PEER_CONNECTION] Buffer low for peer ${peerId}`);
+        // Buffer low event
       }
     });
     set({ webRTCManager, localStream });
@@ -135,13 +147,11 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
   },
 
   removePeer: (userId) => {
-    // 해당 피어의 활성 전송 취소
     const { activeTransfers } = get();
     activeTransfers.forEach((transfer, transferId) => {
       const peers = get().peers;
       const peer = peers.get(userId);
       if (peer) {
-        // 해당 피어와 관련된 전송만 취소
         console.log(`[PEER_CONNECTION] Cancelling transfers for disconnected peer ${userId}`);
       }
     });
@@ -156,6 +166,10 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
     return get().webRTCManager?.sendToAllPeers(message) ?? { successful: [], failed: [] };
   },
 
+  sendToPeer: (peerId, message) => {
+    return get().webRTCManager?.sendToPeer(peerId, message) ?? false;
+  },
+
   replaceTrack: (oldTrack, newTrack, stream) => {
     get().webRTCManager?.replaceTrack(oldTrack, newTrack, stream);
   },
@@ -167,32 +181,72 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         type: 'ack-received',
         payload: { transferId, chunkIndex }
       });
+      
+      // ACK 받을 때마다 즉시 메트릭 업데이트
+      const newAckedCount = (transfer.metrics.chunksAcked || 0) + 1;
+      get().updateTransferProgress(transferId, {
+        chunksAcked: newAckedCount,
+        progress: newAckedCount / transfer.metrics.totalChunks
+      });
+    }
+  },
+
+  // 새로운 메서드: 진행률 업데이트 전용
+  updateTransferProgress: (transferId, metrics) => {
+    set(produce(state => {
+      const transfer = state.activeTransfers.get(transferId);
+      if (transfer) {
+        // 메트릭 업데이트
+        transfer.metrics = {
+          ...transfer.metrics,
+          ...metrics,
+          lastUpdateTime: Date.now()
+        };
+        
+        // 디버그 로그
+        const progress = metrics.progress || transfer.metrics.progress;
+        if (progress > 0) {
+          console.log(`[TRANSFER_PROGRESS] ${transferId}: ${(progress * 100).toFixed(1)}% (${transfer.metrics.chunksAcked}/${transfer.metrics.totalChunks})`);
+        }
+      }
+    }));
+    
+    // ChatStore도 즉시 업데이트
+    const transfer = get().activeTransfers.get(transferId);
+    if (transfer && metrics.progress !== undefined) {
+      const { updateFileProgress } = useChatStore.getState();
+      const bytesTransferred = metrics.progress * transfer.file.size;
+      updateFileProgress(transferId, bytesTransferred, true);
     }
   },
 
   sendFile: async (file: File) => {
-    const { webRTCManager, sendToAllPeers, activeTransfers } = get();
-    const { addFileMessage, updateFileProgress } = useChatStore.getState();
+    const { webRTCManager, sendToAllPeers } = get();
+    const { addFileMessage } = useChatStore.getState();
+    const sessionInfo = useSessionStore.getState().getSessionInfo();
 
     if (!webRTCManager) {
       console.error("[FILE_TRANSFER] WebRTCManager is not initialized.");
       return;
     }
 
-    // 파일 유효성 검증
+    if (!sessionInfo) {
+      console.error("[FILE_TRANSFER] No session info available.");
+      return;
+    }
+
     if (!isValidFileType(file)) {
       console.error("[FILE_TRANSFER] Invalid file type.");
-      // TODO: Toast notification
+      toast.error("This file type is not allowed for security reasons.");
       return;
     }
 
     if (!isValidFileSize(file.size)) {
-      console.error("[FILE_TRANSFER] File size exceeds limit (500MB).");
-      // TODO: Toast notification
+      console.error("[FILE_TRANSFER] File size exceeds limit (50GB).");
+      toast.error("File size exceeds the maximum limit of 50GB.");
       return;
     }
 
-    // 동적 청크 크기 계산
     const chunkSize = calculateOptimalChunkSize(file.size);
     const totalChunks = calculateTotalChunks(file.size, chunkSize);
     const transferId = `${file.name}-${file.size}-${Date.now()}`;
@@ -206,128 +260,191 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       chunkSize
     };
 
-    console.log(`[FILE_TRANSFER] Starting transfer with dynamic chunk size: ${chunkSize} bytes`);
+    console.log(`[FILE_TRANSFER] Starting transfer: ${file.name} (${(file.size/1024/1024).toFixed(2)}MB, ${totalChunks} chunks)`);
 
-    // UI에 파일 메시지 표시
-    await addFileMessage('local-user', 'You', fileMeta, true);
+    // UI 업데이트 - 파일 메시지 추가
+    await addFileMessage(sessionInfo.userId, sessionInfo.nickname, fileMeta, true);
     
-    // 다른 피어들에게 파일 전송 시작 알림
+    // 다른 피어들에게 파일 메타데이터 전송
     sendToAllPeers(JSON.stringify({ 
       type: 'file-meta', 
       payload: fileMeta 
     }));
 
-    // 웹 워커 생성
+    // Worker 생성
     const worker = new Worker(
       new URL('../workers/file.worker.ts', import.meta.url),
       { type: 'module' }
     );
 
-    // 전송 상태 저장
+    // 초기 메트릭스
+    const initialMetrics: FileTransferMetrics = {
+      progress: 0,
+      sendProgress: 0,
+      speed: 0,
+      sendSpeed: 0,
+      chunksAcked: 0,
+      chunksSent: 0,
+      totalChunks,
+      windowSize: 10,
+      inFlight: 0,
+      lastUpdateTime: Date.now()
+    };
+    
     const transferState: FileTransferState = {
       transferId,
       file,
       worker,
       isPaused: false,
-      startTime: Date.now()
+      startTime: Date.now(),
+      metrics: initialMetrics
     };
-
+    
     set(produce(state => {
       state.activeTransfers.set(transferId, transferState);
     }));
 
-    // 워커 메시지 핸들러 설정
-    worker.onmessage = (event) => {
+    // Worker 메시지 핸들러
+    worker.onmessage = async (event) => {
       const { type, payload } = event.data;
       
       switch (type) {
         case 'chunk-ready':
-          const result = sendToAllPeers(payload.chunk);
-          if (payload.isRetry) {
-            console.log(`[FILE_TRANSFER] Retrying chunk ${payload.chunkIndex}, successful peers: ${result.successful.length}`);
+          // 청크 전송
+          if (payload.needsFlowControl) {
+            const { webRTCManager } = get();
+            const peers = Array.from(get().peers.keys());
+            
+            for (const peerId of peers) {
+              const success = await webRTCManager?.sendWithFlowControl(
+                peerId, 
+                payload.chunk,
+                5000
+              ) ?? false;
+              
+              if (!success) {
+                console.warn(`[FILE_TRANSFER] Buffer full for peer ${peerId}, retrying...`);
+                setTimeout(() => {
+                  webRTCManager?.sendToPeer(peerId, payload.chunk);
+                }, 100);
+              }
+            }
+          } else {
+            const result = sendToAllPeers(payload.chunk);
+            if (payload.isRetry && result.failed.length > 0) {
+              console.log(`[FILE_TRANSFER] Retry failed for ${result.failed.length} peers`);
+            }
+          }
+          
+          // 청크 전송할 때마다 sendProgress 업데이트
+          if (payload.chunkIndex !== undefined) {
+            const transfer = get().activeTransfers.get(payload.transferId);
+            if (transfer) {
+              const newSentCount = (transfer.metrics.chunksSent || 0) + 1;
+              get().updateTransferProgress(payload.transferId, {
+                chunksSent: newSentCount,
+                sendProgress: newSentCount / transfer.metrics.totalChunks
+              });
+            }
           }
           break;
           
         case 'progress-update':
-          updateFileProgress(payload.transferId, payload.loaded);
-          
-          set(produce(state => {
-            const transfer = state.activeTransfers.get(payload.transferId);
-            if (transfer) {
-              transfer.metrics = {
-                progress: payload.progress,
-                speed: payload.speed,
-                chunksAcked: payload.chunksAcked,
-                totalChunks: payload.totalChunks,
-                windowSize: payload.windowSize
-              };
-            }
-          }));
-          
-          if (payload.chunksAcked % 10 === 0 || payload.progress === 1) {
-            console.log(
-              `[FILE_TRANSFER] Progress: ${(payload.progress * 100).toFixed(1)}%, ` +
-              `Chunks: ${payload.chunksAcked}/${payload.totalChunks}, ` +
-              `Window: ${payload.windowSize}, ` +
-              `Speed: ${(payload.speed / 1024 / 1024).toFixed(2)} MB/s`
-            );
-          }
+          // Worker에서 오는 진행률 업데이트를 즉시 반영
+          get().updateTransferProgress(payload.transferId, {
+            progress: payload.progress,
+            sendProgress: payload.sendProgress,
+            speed: payload.speed,
+            sendSpeed: payload.sendSpeed,
+            chunksAcked: payload.chunksAcked,
+            chunksSent: payload.chunksSent,
+            windowSize: payload.windowSize,
+            inFlight: payload.inFlight
+          });
           break;
           
         case 'transfer-complete':
           console.log(
-            `[FILE_TRANSFER] Transfer complete: ${payload.transferId}, ` +
+            `[FILE_TRANSFER] Complete: ${payload.transferId}, ` +
             `Duration: ${(payload.duration / 1000).toFixed(1)}s, ` +
-            `Avg Speed: ${(payload.avgSpeed / 1024 / 1024).toFixed(2)} MB/s`
+            `Speed: ${(payload.avgSpeed / 1024 / 1024).toFixed(2)} MB/s`
           );
           
+          // 완료 상태 업데이트
+          get().updateTransferProgress(payload.transferId, {
+            progress: 1,
+            sendProgress: 1,
+            chunksAcked: payload.totalChunks,
+            chunksSent: payload.totalChunks
+          });
+          
+          // Worker 종료
           worker.terminate();
           
-          // 정리 전 짧은 지연
+          // 잠시 후 activeTransfer 정리
           setTimeout(() => {
             set(produce(state => {
               state.activeTransfers.delete(payload.transferId);
             }));
-          }, 100);
+          }, 500);
+          
+          toast.success("File sent successfully!");
           break;
           
         case 'transfer-error':
-          console.error(`[FILE_TRANSFER] Transfer error for ${payload.transferId}:`, payload.error);
+          console.error(`[FILE_TRANSFER] Error: ${payload.error}`);
+          toast.error(`Transfer failed: ${payload.error}`);
           
           worker.terminate();
           set(produce(state => {
             state.activeTransfers.delete(payload.transferId);
           }));
-          
-          // TODO: Toast notification for error
           break;
           
         case 'transfer-cancelled':
-          console.log(`[FILE_TRANSFER] Transfer cancelled: ${payload.transferId}`);
+          console.log(`[FILE_TRANSFER] Cancelled: ${payload.transferId}`);
+          toast.info("Transfer cancelled");
+          
           set(produce(state => {
             state.activeTransfers.delete(payload.transferId);
           }));
           break;
-
+    
         case 'transfer-paused':
-          console.log(`[FILE_TRANSFER] Transfer paused: ${payload.transferId}`);
+          console.log(`[FILE_TRANSFER] Paused: ${payload.transferId}`);
+          toast.info("Transfer paused");
           break;
-
+    
         case 'transfer-resumed':
-          console.log(`[FILE_TRANSFER] Transfer resumed: ${payload.transferId}`);
+          console.log(`[FILE_TRANSFER] Resumed: ${payload.transferId}`);
+          toast.info("Transfer resumed");
+          break;
+          
+        case 'check-buffer':
+          const canSend = get().webRTCManager?.getConnectedPeerIds().length > 0;
+          worker.postMessage({
+            type: 'buffer-status',
+            payload: { canSend }
+          });
+          break;
+          
+        case 'debug-log':
+          // Worker에서 오는 디버그 로그
+          console.log(`[WORKER] ${payload.message}`);
           break;
       }
     };
 
     worker.onerror = (error) => {
-      console.error(`[FILE_TRANSFER] Worker error for ${transferId}:`, error);
+      console.error(`[FILE_TRANSFER] Worker error:`, error);
+      toast.error("Transfer worker error");
       worker.terminate();
       set(produce(state => {
         state.activeTransfers.delete(transferId);
       }));
     };
 
-    // 워커에 파일 전송 시작 명령
+    // Worker 시작
     worker.postMessage({
       type: 'start-transfer',
       payload: { file, transferId }
@@ -343,7 +460,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       });
       transfer.worker.terminate();
       
-      // 확실한 정리를 위한 지연
       setTimeout(() => {
         set(produce(state => {
           state.activeTransfers.delete(transferId);
@@ -381,7 +497,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
   },
 
   cleanup: () => {
-    // 모든 활성 전송 취소
     const { activeTransfers } = get();
     activeTransfers.forEach((transfer, transferId) => {
       if (transfer.worker) {

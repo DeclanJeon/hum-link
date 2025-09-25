@@ -7,6 +7,7 @@ import { VideoPreview } from "@/components/VideoPreview";
 import { toast } from "sonner";
 import { Mic, MicOff, Video, VideoOff } from "lucide-react";
 import { useLobbyStore } from "@/stores/useLobbyStore";
+import { useSessionStore } from "@/stores/useSessionStore";
 import { nanoid } from 'nanoid';
 
 const Lobby = () => {
@@ -20,6 +21,8 @@ const Lobby = () => {
     initialize, toggleAudio, toggleVideo, setSelectedAudioDevice, setSelectedVideoDevice, cleanup
   } = useLobbyStore();
 
+  const { setSession } = useSessionStore();
+
   const joiningRef = useRef(false);
 
   const handleJoinRoom = () => {
@@ -32,9 +35,13 @@ const Lobby = () => {
     
     joiningRef.current = true;
     
+    // Generate unique userId and set session
+    const userId = nanoid();
+    setSession(userId, connectionDetails.nickname, connectionDetails.roomTitle);
+    
     navigate(`/room/${encodeURIComponent(connectionDetails.roomTitle)}`, {
         state: {
-            connectionDetails: { ...connectionDetails, userId: nanoid() },
+            connectionDetails: { ...connectionDetails, userId },
             mediaPreferences: {
                 audioEnabled: isAudioEnabled,
                 videoEnabled: isVideoEnabled,
@@ -105,7 +112,7 @@ const Lobby = () => {
                 <VoiceVisualizer audioLevel={audioLevel} isActive={isAudioEnabled} size="large" />
               </div>
               {isAudioEnabled && audioLevel > 0.1 && (
-                <p className="text-success text-sm mt-2"> Your voice sounds clear!</p>
+                <p className="text-success text-sm mt-2">✓ Your voice sounds clear!</p>
               )}
             </div>
             <div className="control-panel">

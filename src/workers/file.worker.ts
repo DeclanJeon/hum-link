@@ -9,43 +9,77 @@ import {
 
 declare const self: DedicatedWorkerGlobalScope;
 
-// 슬라이딩 윈도우 설정 (64KB 청크에 맞게 조정)
-const INITIAL_WINDOW_SIZE = 5; // 초기 윈도우 크기
-const MAX_WINDOW_SIZE = 30; // 최대 윈도우 크기 증가
-const MIN_WINDOW_SIZE = 2; // 최소 윈도우 크기
-const ACK_TIMEOUT_MS = 15000; // ACK 타임아웃 (15초)
-const MAX_RETRIES = 3; // 최대 재시도 횟수
-const SEND_DELAY_MS = 10; // 청크 간 전송 지연 (10ms로 증가)
+type NetworkQuality = 'excellent' | 'good' | 'moderate' | 'poor';
+type TransferPhase = 'burst' | 'recovery' | 'complete';
 
-interface ChunkInfo {
-  index: number;
-  data: ArrayBuffer;
+interface ChunkState {
+  sent: boolean;
+  acked: boolean;
   retries: number;
-  sentTime: number;
+  lastSentTime: number;
+  size: number;
 }
 
-interface TransferMetrics {
-  startTime: number;
-  bytesTransferred: number;
-  chunksAcked: number;
-  totalChunks: number;
-  currentWindowSize: number;
-  rttHistory: number[];
-  errors: number;
-  consecutiveSuccesses: number;
-  consecutiveFailures: number;
-}
+// DataChannel 버퍼를 고려한 안전한 설정
+const TRANSFER_CONFIGS = {
+  excellent: {
+    windowSize: 30,       // 줄임
+    batchSize: 10,        // 줄임
+    timeout: 10000,
+    maxRetries: 2,
+    sendDelay: 10         // 10ms 지연 추가
+  },
+  good: {
+    windowSize: 20,       
+    batchSize: 5,         
+    timeout: 10000,
+    maxRetries: 3,
+    sendDelay: 20         // 20ms 지연
+  },
+  moderate: {
+    windowSize: 10,       
+    batchSize: 3,         
+    timeout: 15000,
+    maxRetries: 3,
+    sendDelay: 30         // 30ms 지연
+  },
+  poor: {
+    windowSize: 5,
+    batchSize: 2,
+    timeout: 20000,
+    maxRetries: 4,
+    sendDelay: 50
+  }
+};
 
-class FileTransferWorker {
-  private pendingAcks: Map<string, () => void> = new Map();
-  private inFlightChunks: Map<number, ChunkInfo> = new Map();
-  private metrics: TransferMetrics | null = null;
-  private chunkSize: number = 0;
+const CHUNK_SIZE = 64 * 1024; // 64KB
+const BUFFER_CHECK_INTERVAL = 100; // 버퍼 체크 간격
+
+class FlowControlFileWorker {
   private file: File | null = null;
   private transferId: string = '';
+  private chunkSize: number = CHUNK_SIZE;
+  private totalChunks: number = 0;
+  
+  private phase: TransferPhase = 'burst';
+  private chunkStates: Map<number, ChunkState> = new Map();
   private isCancelled: boolean = false;
   private isPaused: boolean = false;
-  private checkTimeoutInterval: NodeJS.Timeout | null = null;
+  
+  private networkQuality: NetworkQuality = 'moderate';
+  private currentConfig = TRANSFER_CONFIGS.moderate;
+  
+  private startTime: number = 0;
+  private bytesTransferred: number = 0;
+  private bytesSent: number = 0;
+  private lastProgressReport: number = 0;
+  
+  private inFlightChunks: Set<number> = new Set();
+  private currentWindowSize: number = 10;
+  private consecutiveErrors: number = 0;
+  private bufferFullCount: number = 0;
+  
+  private checkInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     self.onmessage = this.handleMessage.bind(this);
@@ -58,393 +92,432 @@ class FileTransferWorker {
       case 'start-transfer':
         await this.startTransfer(payload.file, payload.transferId);
         break;
+        
       case 'ack-received':
         this.handleAckReceived(payload.transferId, payload.chunkIndex);
         break;
+        
+      case 'buffer-status':
+        this.handleBufferStatus(payload.canSend);
+        break;
+        
       case 'cancel-transfer':
         this.cancelTransfer();
         break;
+        
       case 'pause-transfer':
         this.pauseTransfer();
         break;
+        
       case 'resume-transfer':
         this.resumeTransfer();
         break;
+        
       default:
-        console.warn(`[FileWorker] Unknown message type: ${type}`);
+        console.warn(`[FlowWorker] Unknown message type: ${type}`);
     }
   }
 
   private async startTransfer(file: File, transferId: string) {
     this.file = file;
     this.transferId = transferId;
+    this.chunkSize = CHUNK_SIZE;
+    this.totalChunks = calculateTotalChunks(file.size, this.chunkSize);
+    this.startTime = Date.now();
     this.isCancelled = false;
     this.isPaused = false;
-    
-    // 파일 크기에 따른 최적 청크 크기 계산
-    this.chunkSize = calculateOptimalChunkSize(file.size);
-    const totalChunks = calculateTotalChunks(file.size, this.chunkSize);
 
-    // 메트릭 초기화
-    this.metrics = {
-      startTime: Date.now(),
-      bytesTransferred: 0,
-      chunksAcked: 0,
-      totalChunks,
-      currentWindowSize: INITIAL_WINDOW_SIZE,
-      rttHistory: [],
-      errors: 0,
-      consecutiveSuccesses: 0,
-      consecutiveFailures: 0
-    };
-
-    console.log(`[FileWorker] Starting transfer: ${transferId}`);
-    console.log(`[FileWorker] File size: ${file.size}, Chunk size: ${this.chunkSize}, Total chunks: ${totalChunks}`);
+    console.log(`[FlowWorker] Starting transfer with flow control`);
+    console.log(`[FlowWorker] File: ${(file.size / (1024*1024)).toFixed(2)}MB, ${this.totalChunks} chunks`);
 
     try {
-      await this.transferWithSlidingWindow();
+      // 청크 상태 초기화
+      this.initializeChunkStates();
+      
+      // 네트워크 품질 설정
+      this.detectNetworkQuality();
+      
+      // 흐름 제어 전송
+      await this.flowControlTransfer();
+      
+      // 복구 단계
+      await this.recoveryPhase();
+      
+      // 완료 처리
+      await this.completeTransfer();
+      
     } catch (error) {
-      console.error(`[FileWorker] Transfer failed: ${transferId}`, error);
-      self.postMessage({
-        type: 'transfer-error',
-        payload: { 
-          transferId, 
-          error: (error as Error).message 
-        }
-      });
+      console.error(`[FlowWorker] Transfer failed:`, error);
+      this.reportError((error as Error).message);
     } finally {
-      if (!this.isCancelled) {
-        this.cleanup();
-      }
+      this.cleanup();
     }
   }
 
-  private async transferWithSlidingWindow() {
-    if (!this.file || !this.metrics) return;
+  private detectNetworkQuality() {
+    const fileSizeMB = this.file!.size / (1024 * 1024);
+    
+    if (fileSizeMB < 10) {
+      this.networkQuality = 'good';
+      this.currentWindowSize = 20;
+    } else if (fileSizeMB < 100) {
+      this.networkQuality = 'moderate';
+      this.currentWindowSize = 10;
+    } else {
+      this.networkQuality = 'moderate';
+      this.currentWindowSize = 5;
+    }
+    
+    this.currentConfig = TRANSFER_CONFIGS[this.networkQuality];
+    console.log(`[FlowWorker] Network: ${this.networkQuality}, initial window: ${this.currentWindowSize}`);
+  }
 
-    let nextChunkToSend = 0;
-    const totalChunks = this.metrics.totalChunks;
-
-    // 타임아웃 체크 인터벌 설정
-    this.checkTimeoutInterval = setInterval(() => {
-      this.checkForTimeouts();
-    }, 1000) as any;
-
-    while (this.metrics.chunksAcked < totalChunks && !this.isCancelled) {
-      // 일시정지 상태 확인
+  private async flowControlTransfer() {
+    this.phase = 'burst';
+    console.log(`[FlowWorker] Starting flow-controlled transfer`);
+    
+    let nextChunk = 0;
+    let lastStatusTime = Date.now();
+    
+    // 타임아웃 체크
+    this.checkInterval = setInterval(() => {
+      this.checkTimeouts();
+    }, 2000) as any;
+    
+    while (nextChunk < this.totalChunks || this.inFlightChunks.size > 0) {
+      if (this.isCancelled) break;
+      
+      // 일시정지 처리
       while (this.isPaused && !this.isCancelled) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-
-      // 윈도우를 채움
-      while (
-        this.inFlightChunks.size < this.metrics.currentWindowSize &&
-        nextChunkToSend < totalChunks &&
-        !this.isCancelled &&
-        !this.isPaused
-      ) {
-        await this.sendChunk(nextChunkToSend);
-        nextChunkToSend++;
-        
-        // 청크 간 짧은 지연 추가 (버퍼 오버플로우 방지)
-        if (SEND_DELAY_MS > 0) {
-          await new Promise(resolve => setTimeout(resolve, SEND_DELAY_MS));
+      
+      // 윈도우 크기 제한
+      while (this.inFlightChunks.size < this.currentWindowSize && nextChunk < this.totalChunks) {
+        // 버퍼 체크 메시지 전송
+        if (Date.now() - lastStatusTime > BUFFER_CHECK_INTERVAL) {
+          self.postMessage({
+            type: 'check-buffer',
+            payload: { transferId: this.transferId }
+          });
+          lastStatusTime = Date.now();
         }
+        
+        // 청크 전송
+        await this.sendChunkWithFlowControl(nextChunk);
+        nextChunk++;
+        
+        // 전송 간 지연 (버퍼 오버플로우 방지)
+        await new Promise(resolve => setTimeout(resolve, this.currentConfig.sendDelay));
       }
-
-      // ACK 대기 또는 타임아웃 처리
-      await this.waitForAcksOrTimeout();
-
-      // 윈도우 크기 조정
-      this.adjustWindowSize();
-
-      // 진행 상황 보고
+      
+      // 진행률 보고
       this.reportProgress();
-    }
-
-    if (!this.isCancelled && this.metrics.chunksAcked === totalChunks) {
-      await this.sendEndSignal();
-      this.reportCompletion();
-    }
-  }
-
-  private async sendChunk(chunkIndex: number, isRetry: boolean = false) {
-    if (!this.file) return;
-
-    const offset = calculateFileOffset(chunkIndex, this.chunkSize);
-    const actualSize = calculateActualChunkSize(this.file.size, chunkIndex, this.chunkSize);
-    
-    const chunkBlob = this.file.slice(offset, offset + actualSize);
-    const chunkBuffer = await chunkBlob.arrayBuffer();
-
-    // 헤더 생성 (Type: 1 = Data Chunk, 4 bytes for index)
-    const header = new ArrayBuffer(5);
-    const headerView = new DataView(header);
-    headerView.setUint8(0, 1); // Type: Data Chunk
-    headerView.setUint32(1, chunkIndex, false); // Big-endian
-
-    // 헤더와 데이터 결합
-    const combined = new Uint8Array(header.byteLength + chunkBuffer.byteLength);
-    combined.set(new Uint8Array(header), 0);
-    combined.set(new Uint8Array(chunkBuffer), header.byteLength);
-
-    // 전송 정보 저장 (원본 데이터 보관)
-    if (!isRetry) {
-      this.inFlightChunks.set(chunkIndex, {
-        index: chunkIndex,
-        data: combined.buffer.slice(0), // 복사본 저장
-        retries: 0,
-        sentTime: Date.now()
-      });
-    } else {
-      const chunkInfo = this.inFlightChunks.get(chunkIndex);
-      if (chunkInfo) {
-        chunkInfo.sentTime = Date.now();
-      }
-    }
-
-    // 메인 스레드로 청크 전송 (복사본 전송)
-    const dataToSend = combined.buffer.slice(0);
-    self.postMessage({
-      type: 'chunk-ready',
-      payload: {
-        transferId: this.transferId,
-        chunk: dataToSend,
-        chunkIndex,
-        isRetry
-      }
-    }, [dataToSend]); // Transferable로 전송
-  }
-
-  private async waitForAcksOrTimeout() {
-    const checkInterval = 100; // 100ms마다 체크
-
-    while (this.inFlightChunks.size > 0 && !this.isCancelled) {
-      // 윈도우에 여유가 생기면 반환
-      if (this.inFlightChunks.size < this.metrics!.currentWindowSize) {
-        break;
-      }
-
-      // 잠시 대기
-      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      
+      // 대기
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // 윈도우 조정
+      this.adjustWindowSize();
     }
   }
 
-  private checkForTimeouts() {
-    if (this.isCancelled || this.isPaused) return;
-
-    const now = Date.now();
+  
+  private async sendChunkWithFlowControl(chunkIndex: number): Promise<void> {
+    if (!this.file || this.isCancelled) return;
     
-    for (const [chunkIndex, chunkInfo] of this.inFlightChunks.entries()) {
-      if (now - chunkInfo.sentTime > ACK_TIMEOUT_MS) {
-        this.handleChunkTimeout(chunkIndex).catch(error => {
-          console.error(`[FileWorker] Error handling timeout for chunk ${chunkIndex}:`, error);
-        });
-      }
-    }
-  }
-
-  private async handleChunkTimeout(chunkIndex: number) {
-    const chunkInfo = this.inFlightChunks.get(chunkIndex);
-    if (!chunkInfo) return;
-
-    console.warn(`[FileWorker] Chunk ${chunkIndex} timeout (retry ${chunkInfo.retries}/${MAX_RETRIES})`);
-
-    if (chunkInfo.retries >= MAX_RETRIES) {
-      // 최대 재시도 횟수 초과
-      this.metrics!.errors++;
-      this.metrics!.consecutiveFailures++;
-      this.inFlightChunks.delete(chunkIndex);
-      throw new Error(`Failed to send chunk ${chunkIndex} after ${MAX_RETRIES} retries`);
-    }
-
-    // 재시도 카운트 증가
-    chunkInfo.retries++;
-    this.metrics!.consecutiveFailures++;
+    const state = this.chunkStates.get(chunkIndex);
+    if (!state || state.sent) return;
     
-    // 저장된 데이터로 재전송
-    const dataToSend = chunkInfo.data.slice(0); // 복사본 생성
-    chunkInfo.sentTime = Date.now(); // 전송 시간 업데이트
-    
-    // 재시도 전 짧은 지연 (지수 백오프)
-    const backoffDelay = Math.min(1000, 100 * Math.pow(2, chunkInfo.retries - 1));
-    await new Promise(resolve => setTimeout(resolve, backoffDelay));
-    
-    self.postMessage({
-      type: 'chunk-ready',
-      payload: {
-        transferId: this.transferId,
-        chunk: dataToSend,
-        chunkIndex,
-        isRetry: true
-      }
-    }, [dataToSend]);
-  }
-
-  private handleAckReceived(transferId: string, chunkIndex: number) {
-    if (transferId !== this.transferId) return;
-
-    const chunkInfo = this.inFlightChunks.get(chunkIndex);
-    if (!chunkInfo) {
-      console.warn(`[FileWorker] Received ACK for unknown chunk: ${chunkIndex}`);
-      return;
-    }
-
-    // RTT 계산
-    const rtt = Date.now() - chunkInfo.sentTime;
-    this.metrics!.rttHistory.push(rtt);
-    
-    // 최근 20개의 RTT만 유지
-    if (this.metrics!.rttHistory.length > 20) {
-      this.metrics!.rttHistory.shift();
-    }
-
-    // 성공 카운터 업데이트
-    this.metrics!.consecutiveSuccesses++;
-    this.metrics!.consecutiveFailures = 0;
-
-    // 청크 완료 처리
-    this.inFlightChunks.delete(chunkIndex);
-    this.metrics!.chunksAcked++;
-    this.metrics!.bytesTransferred += calculateActualChunkSize(
-      this.file!.size,
-      chunkIndex,
-      this.chunkSize
-    );
-
-    // Pending ACK resolver 호출
-    const key = `${transferId}-${chunkIndex}`;
-    const resolver = this.pendingAcks.get(key);
-    if (resolver) {
-      resolver();
-      this.pendingAcks.delete(key);
-    }
-
-    // console.log(`[FileWorker] ACK received for chunk ${chunkIndex}, RTT: ${rtt}ms`);
-  }
-
-  private adjustWindowSize() {
-    if (!this.metrics || this.metrics.rttHistory.length === 0) return;
-
-    // 평균 RTT 계산
-    const avgRtt = this.metrics.rttHistory.reduce((a, b) => a + b, 0) / this.metrics.rttHistory.length;
-
-    // 연속 성공/실패 기반 조정
-    if (this.metrics.consecutiveSuccesses > 20) {
-      // 20개 이상 연속 성공: 윈도우 크기 증가
-      this.metrics.currentWindowSize = Math.min(
-        this.metrics.currentWindowSize + 2,
-        MAX_WINDOW_SIZE
-      );
-      this.metrics.consecutiveSuccesses = 0;
-    } else if (this.metrics.consecutiveFailures > 3) {
-      // 3개 이상 연속 실패: 윈도우 크기 감소
-      this.metrics.currentWindowSize = Math.max(
-        Math.floor(this.metrics.currentWindowSize * 0.7),
-        MIN_WINDOW_SIZE
-      );
-      this.metrics.consecutiveFailures = 0;
-    }
-
-    // RTT 기반 미세 조정
-    if (avgRtt < 30 && this.metrics.errors === 0) {
-      // 매우 빠른 연결이고 에러가 없음: 적극적으로 증가
-      this.metrics.currentWindowSize = Math.min(
-        this.metrics.currentWindowSize + 3,
-        MAX_WINDOW_SIZE
-      );
-    } else if (avgRtt < 100 && this.metrics.errors < 2) {
-      // 빠른 연결: 천천히 증가
-      this.metrics.currentWindowSize = Math.min(
-        this.metrics.currentWindowSize + 1,
-        MAX_WINDOW_SIZE
-      );
-    } else if (avgRtt > 300) {
-      // 느린 연결: 윈도우 크기 감소
-      this.metrics.currentWindowSize = Math.max(
-        this.metrics.currentWindowSize - 1,
-        MIN_WINDOW_SIZE
-      );
-    }
-
-    // 에러율 기반 조정
-    const errorRate = this.metrics.errors / Math.max(1, this.metrics.chunksAcked + this.metrics.errors);
-    if (errorRate > 0.1) {
-      // 10% 이상 에러: 윈도우 크기 대폭 감소
-      this.metrics.currentWindowSize = Math.max(
-        MIN_WINDOW_SIZE,
-        Math.floor(this.metrics.currentWindowSize * 0.5)
-      );
-    }
-  }
-
-  private reportProgress() {
-    if (!this.metrics || !this.file) return;
-
-    const progress = this.metrics.bytesTransferred / this.file.size;
-    const speed = calculateTransferSpeed(
-      this.metrics.bytesTransferred,
-      this.metrics.startTime
-    );
-
-    self.postMessage({
-      type: 'progress-update',
-      payload: {
-        transferId: this.transferId,
-        loaded: this.metrics.bytesTransferred,
-        total: this.file.size,
-        progress,
-        speed,
-        chunksAcked: this.metrics.chunksAcked,
-        totalChunks: this.metrics.totalChunks,
-        windowSize: this.metrics.currentWindowSize
-      }
-    });
-  }
-
-  private async sendEndSignal() {
-    console.log(`[FileWorker] Sending End Signal for ${this.transferId}`);
-    
-    const endHeader = new ArrayBuffer(1);
-    const endHeaderView = new DataView(endHeader);
-    endHeaderView.setUint8(0, 2); // Type: End of File
-    
-    // End Signal을 3번 전송 (신뢰성 향상)
-    for (let i = 0; i < 3; i++) {
-      const dataToSend = endHeader.slice(0);
+    try {
+      const offset = calculateFileOffset(chunkIndex, this.chunkSize);
+      const size = calculateActualChunkSize(this.file.size, chunkIndex, this.chunkSize);
+      const blob = this.file.slice(offset, offset + size);
+      const data = await blob.arrayBuffer();
+      
+      const packet = this.createChunkPacket(chunkIndex, data);
+      
+      state.sent = true;
+      state.lastSentTime = Date.now();
+      this.bytesSent += size;
+      this.inFlightChunks.add(chunkIndex);
+      
+      // 청크 전송 시 인덱스도 함께 전달
       self.postMessage({
         type: 'chunk-ready',
         payload: {
           transferId: this.transferId,
-          chunk: dataToSend
+          chunk: packet,
+          chunkIndex, // 추가
+          needsFlowControl: true
         }
-      }, [dataToSend]);
+      }, [packet]);
       
-      // 전송 간 짧은 지연
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // 전송 직후 진행률 업데이트
+      this.reportProgress();
+      
+      this.consecutiveErrors = 0;
+      
+    } catch (error: any) {
+      console.error(`[FlowWorker] Error sending chunk ${chunkIndex}:`, error);
+      state.sent = false;
+      this.inFlightChunks.delete(chunkIndex);
+      
+      if (error.message?.includes('queue is full')) {
+        this.bufferFullCount++;
+        this.consecutiveErrors++;
+        this.currentWindowSize = Math.max(1, Math.floor(this.currentWindowSize / 2));
+        await new Promise(resolve => setTimeout(resolve, 100 * this.consecutiveErrors));
+      }
+      
+      throw error;
     }
-    
-    console.log(`[FileWorker] End Signal sent 3 times for ${this.transferId}`);
   }
 
-  private reportCompletion() {
-    if (!this.metrics) return;
 
-    const duration = Date.now() - this.metrics.startTime;
-    const avgSpeed = calculateTransferSpeed(
-      this.metrics.bytesTransferred,
-      this.metrics.startTime
+  private createChunkPacket(chunkIndex: number, data: ArrayBuffer): ArrayBuffer {
+    const transferIdBytes = new TextEncoder().encode(this.transferId);
+    const headerSize = 1 + 2 + transferIdBytes.length + 4;
+    const packet = new ArrayBuffer(headerSize + data.byteLength);
+    const view = new DataView(packet);
+    
+    view.setUint8(0, 1); // Type: Data Chunk
+    view.setUint16(1, transferIdBytes.length, false);
+    new Uint8Array(packet, 3, transferIdBytes.length).set(transferIdBytes);
+    view.setUint32(3 + transferIdBytes.length, chunkIndex, false);
+    new Uint8Array(packet, headerSize).set(new Uint8Array(data));
+    
+    return packet;
+  }
+
+  private checkTimeouts() {
+    const now = Date.now();
+    const timeout = this.currentConfig.timeout;
+    let timedOutCount = 0;
+    
+    for (const chunkIndex of this.inFlightChunks) {
+      const state = this.chunkStates.get(chunkIndex);
+      if (state && state.sent && !state.acked) {
+        if (now - state.lastSentTime > timeout) {
+          console.warn(`[FlowWorker] Chunk ${chunkIndex} timed out`);
+          state.sent = false;
+          state.retries++;
+          this.inFlightChunks.delete(chunkIndex);
+          timedOutCount++;
+        }
+      }
+    }
+    
+    // 타임아웃이 많으면 윈도우 크기 감소
+    if (timedOutCount > 0) {
+      this.currentWindowSize = Math.max(1, this.currentWindowSize - timedOutCount);
+      console.log(`[FlowWorker] ${timedOutCount} timeouts, window reduced to ${this.currentWindowSize}`);
+    }
+  }
+
+  private adjustWindowSize() {
+    // 버퍼 풀 빈도에 따라 조정
+    if (this.bufferFullCount > 5) {
+      this.currentWindowSize = Math.max(1, this.currentWindowSize - 1);
+      this.bufferFullCount = 0;
+      console.log(`[FlowWorker] Frequent buffer full, window: ${this.currentWindowSize}`);
+    } else if (this.consecutiveErrors === 0 && this.inFlightChunks.size === 0) {
+      // 모든 청크가 성공적으로 전송되면 증가
+      this.currentWindowSize = Math.min(
+        this.currentConfig.windowSize,
+        this.currentWindowSize + 1
+      );
+    }
+  }
+
+  private async recoveryPhase() {
+    this.phase = 'recovery';
+    
+    // 대기
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const missingChunks: number[] = [];
+    
+    for (const [index, state] of this.chunkStates.entries()) {
+      if (!state.acked && state.retries < this.currentConfig.maxRetries) {
+        missingChunks.push(index);
+      }
+    }
+    
+    if (missingChunks.length === 0) {
+      console.log('[FlowWorker] No recovery needed');
+      return;
+    }
+    
+    console.log(`[FlowWorker] Recovery: ${missingChunks.length} missing chunks`);
+    
+    // 천천히 재전송
+    for (const chunkIndex of missingChunks) {
+      if (this.isCancelled) break;
+      
+      const state = this.chunkStates.get(chunkIndex);
+      if (state && !state.acked) {
+        state.sent = false;
+        await this.sendChunkWithFlowControl(chunkIndex);
+        await new Promise(resolve => setTimeout(resolve, 100)); // 재전송 간 대기
+      }
+    }
+  }
+
+  private handleAckReceived(transferId: string, chunkIndex: number) {
+    if (transferId !== this.transferId) return;
+    
+    const state = this.chunkStates.get(chunkIndex);
+    if (!state || state.acked) return;
+    
+    state.acked = true;
+    this.bytesTransferred += state.size;
+    this.inFlightChunks.delete(chunkIndex);
+    
+    // ACK 받을 때마다 즉시 진행률 리포트
+    this.reportProgress();
+    
+    // RTT 기반 윈도우 조정
+    const rtt = Date.now() - state.lastSentTime;
+    
+    if (rtt < 50) {
+      this.currentWindowSize = Math.min(
+        this.currentConfig.windowSize,
+        this.currentWindowSize + 1
+      );
+    } else if (rtt > 500) {
+      this.currentWindowSize = Math.max(2, this.currentWindowSize - 1);
+    }
+  }
+
+  private handleBufferStatus(canSend: boolean) {
+    if (!canSend) {
+      // 버퍼가 가득 참
+      this.bufferFullCount++;
+      this.currentWindowSize = Math.max(1, Math.floor(this.currentWindowSize * 0.8));
+      console.log(`[FlowWorker] Buffer full signal, window: ${this.currentWindowSize}`);
+    }
+  }
+
+  private reportProgress() {
+    const now = Date.now();
+    // 50ms마다 업데이트 (더 빠르게)
+    if (now - this.lastProgressReport < 50) return;
+    
+    this.lastProgressReport = now;
+    
+    const sentCount = Array.from(this.chunkStates.values()).filter(s => s.sent).length;
+    const ackedCount = Array.from(this.chunkStates.values()).filter(s => s.acked).length;
+    
+    const actualProgress = ackedCount / this.totalChunks;
+    const expectedProgress = sentCount / this.totalChunks;
+    
+    const elapsedSeconds = (now - this.startTime) / 1000;
+    const actualSpeed = this.bytesTransferred / elapsedSeconds;
+    const sendSpeed = this.bytesSent / elapsedSeconds;
+    
+    // 매번 progress 업데이트 전송
+    self.postMessage({
+      type: 'progress-update',
+      payload: {
+        transferId: this.transferId,
+        loaded: this.bytesTransferred,
+        total: this.file!.size,
+        progress: actualProgress,
+        sendProgress: expectedProgress,
+        speed: actualSpeed,
+        sendSpeed: sendSpeed,
+        chunksAcked: ackedCount,
+        chunksSent: sentCount,
+        totalChunks: this.totalChunks,
+        windowSize: this.currentWindowSize,
+        inFlight: this.inFlightChunks.size,
+        phase: this.phase,
+        elapsedTime: elapsedSeconds
+      }
+    });
+    
+    // 디버그 메시지 (메인 스레드로)
+    if (Math.floor(actualProgress * 20) !== Math.floor(this.lastLoggedProgress * 20)) {
+      self.postMessage({
+        type: 'debug-log',
+        payload: {
+          message: `Progress: ${(actualProgress * 100).toFixed(1)}% (ACK: ${ackedCount}/${this.totalChunks}, Sent: ${sentCount}/${this.totalChunks})`
+        }
+      });
+      this.lastLoggedProgress = actualProgress;
+    }
+  }
+    
+  private lastLoggedProgress: number = 0;  
+
+  private async completeTransfer() {
+    this.phase = 'complete';
+    
+    await this.sendEndSignal();
+    
+    const duration = Date.now() - this.startTime;
+    const avgSpeed = this.bytesTransferred / (duration / 1000);
+    const ackedCount = Array.from(this.chunkStates.values()).filter(s => s.acked).length;
+    
+    console.log(
+      `[FlowWorker] Complete: ${(duration/1000).toFixed(1)}s, ` +
+      `${(avgSpeed/1024/1024).toFixed(2)}MB/s, ` +
+      `${ackedCount}/${this.totalChunks} chunks`
     );
-
+    
     self.postMessage({
       type: 'transfer-complete',
       payload: {
         transferId: this.transferId,
         duration,
         avgSpeed,
-        totalBytes: this.metrics.bytesTransferred,
-        totalChunks: this.metrics.totalChunks
+        totalBytes: this.bytesTransferred,
+        totalChunks: this.totalChunks,
+        ackedChunks: ackedCount
       }
+    });
+  }
+
+  private async sendEndSignal() {
+    const transferIdBytes = new TextEncoder().encode(this.transferId);
+    const packet = new ArrayBuffer(3 + transferIdBytes.length);
+    const view = new DataView(packet);
+    
+    view.setUint8(0, 2);
+    view.setUint16(1, transferIdBytes.length, false);
+    new Uint8Array(packet, 3).set(transferIdBytes);
+    
+    for (let i = 0; i < 3; i++) {
+      self.postMessage({
+        type: 'chunk-ready',
+        payload: {
+          transferId: this.transferId,
+          chunk: packet.slice(0)
+        }
+      }, [packet.slice(0)]);
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  private initializeChunkStates() {
+    for (let i = 0; i < this.totalChunks; i++) {
+      const size = calculateActualChunkSize(this.file!.size, i, this.chunkSize);
+      this.chunkStates.set(i, {
+        sent: false,
+        acked: false,
+        retries: 0,
+        lastSentTime: 0,
+        size
+      });
+    }
+  }
+
+  private reportError(error: string) {
+    self.postMessage({
+      type: 'transfer-error',
+      payload: { transferId: this.transferId, error }
     });
   }
 
@@ -459,38 +532,23 @@ class FileTransferWorker {
 
   private pauseTransfer() {
     this.isPaused = true;
-    self.postMessage({
-      type: 'transfer-paused',
-      payload: { transferId: this.transferId }
-    });
   }
 
   private resumeTransfer() {
     this.isPaused = false;
-    self.postMessage({
-      type: 'transfer-resumed',
-      payload: { transferId: this.transferId }
-    });
   }
 
   private cleanup() {
-    if (this.checkTimeoutInterval) {
-      clearInterval(this.checkTimeoutInterval as any);
-      this.checkTimeoutInterval = null;
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval as any);
     }
     
-    this.pendingAcks.clear();
+    this.chunkStates.clear();
     this.inFlightChunks.clear();
-    this.metrics = null;
     this.file = null;
-    this.transferId = '';
-    this.isCancelled = false;
-    this.isPaused = false;
     
-    // 워커 종료
     self.close();
   }
 }
 
-// 워커 인스턴스 생성
-new FileTransferWorker();
+new FlowControlFileWorker();

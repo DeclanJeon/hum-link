@@ -4,7 +4,8 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { X, Send, Paperclip } from "lucide-react";
 import { useChatStore, ChatMessage } from "@/stores/useChatStore";
-import { usePeerConnectionStore } from "@/stores/usePeerConnectionStore"; 
+import { usePeerConnectionStore } from "@/stores/usePeerConnectionStore";
+import { useSessionStore } from "@/stores/useSessionStore";
 import { FileMessage } from "./FileMessage";
 import { nanoid } from "nanoid";
 
@@ -15,11 +16,12 @@ interface ChatPanelProps {
 
 export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
   const { chatMessages, isTyping, addMessage } = useChatStore();
-  // ✅ 수정: sendToAllPeers와 sendFile 액션 가져오기
   const { sendToAllPeers, sendFile } = usePeerConnectionStore();
+  const { getSessionInfo } = useSessionStore();
   
-  const userId = 'local-user'; 
-  const nickname = 'You';
+  const sessionInfo = getSessionInfo();
+  const userId = sessionInfo?.userId || 'unknown-user';
+  const nickname = sessionInfo?.nickname || 'Unknown';
 
   const [newMessage, setNewMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -36,9 +38,19 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
   };
 
   const sendChatMessage = (text: string) => {
-    if (!userId || !nickname) return;
+    if (!sessionInfo) {
+      console.error("[ChatPanel] No session info available");
+      return;
+    }
     
-    const message: ChatMessage = { id: nanoid(), type: 'text', text, senderId: userId, senderNickname: nickname, timestamp: Date.now() };
+    const message: ChatMessage = { 
+      id: nanoid(), 
+      type: 'text', 
+      text, 
+      senderId: userId, 
+      senderNickname: nickname, 
+      timestamp: Date.now() 
+    };
     addMessage(message);
     const data = { type: 'chat', payload: message };
     sendToAllPeers(JSON.stringify(data));
@@ -53,13 +65,11 @@ export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
     }
   };
 
-  // ✅ 수정: 파일 선택 시 sendFile 액션 호출
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      sendFile(file); // 파일 전송 시작
+      sendFile(file);
     }
-    // 입력 필드 초기화
     if(fileInputRef.current) fileInputRef.current.value = "";
   };
 

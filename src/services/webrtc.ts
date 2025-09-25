@@ -8,29 +8,28 @@ interface WebRTCEvents {
   onData: (peerId: string, data: any) => void;
   onClose: (peerId: string) => void;
   onError: (peerId: string, error: Error) => void;
-  onBufferLow?: (peerId: string) => void; // 버퍼 낮음 이벤트 추가
+  onBufferLow?: (peerId: string) => void;
 }
 
-// DataChannel 설정 상수
+// DataChannel 설정
 const DATACHANNEL_CONFIG = {
   ordered: true,
-  maxRetransmits: 30, // 재전송 횟수 증가
+  maxRetransmits: 30,
   maxPacketLifeTime: undefined,
   protocol: '',
   negotiated: false,
   id: undefined
 };
 
-// 버퍼 관리 상수 (조정됨)
-const BUFFER_HIGH_THRESHOLD = 4 * 1024 * 1024; // 4MB - 버퍼가 가득 찰 임계값
-const BUFFER_LOW_THRESHOLD = 512 * 1024;  // 512KB - 버퍼가 비었다고 판단할 임계값
-const BUFFER_CHECK_INTERVAL = 50; // 50ms마다 버퍼 체크
+// 버퍼 관리 상수 (바이트)
+const BUFFER_HIGH_THRESHOLD = 4 * 1024 * 1024; // 4MB - 버퍼 상한선
+const BUFFER_LOW_THRESHOLD = 512 * 1024;  // 512KB - 버퍼 하한선
+const BUFFER_CHECK_INTERVAL = 50; // 50ms 간격
 
 export class WebRTCManager {
   private peers: Map<string, PeerInstance> = new Map();
   private localStream: MediaStream;
   private events: WebRTCEvents;
-  private bufferMonitors: Map<string, NodeJS.Timeout> = new Map();
   private connectionRetries: Map<string, number> = new Map();
   private readonly MAX_RETRIES = 3;
 
@@ -40,7 +39,7 @@ export class WebRTCManager {
   }
 
   public createPeer(peerId: string, initiator: boolean): PeerInstance {
-    // 기존 peer가 있으면 정리
+    // 기존 peer 정리
     if (this.peers.has(peerId)) {
       this.removePeer(peerId);
     }
@@ -49,18 +48,13 @@ export class WebRTCManager {
       initiator: initiator,
       stream: this.localStream,
       trickle: true,
-      destroyOnSignalError: false,
-      // DataChannel 설정 추가
       channelConfig: DATACHANNEL_CONFIG,
-      // SCTP 설정 (더 큰 메시지 허용)
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' }
         ],
-        sdpSemantics: 'unified-plan',
-        // DataChannel 버퍼 크기 증가
         iceCandidatePoolSize: 10
       }
     });
@@ -69,7 +63,7 @@ export class WebRTCManager {
     this.peers.set(peerId, peer);
     this.connectionRetries.set(peerId, 0);
     
-    // 연결 후 버퍼 설정
+    // 연결 시 버퍼 설정
     peer.on('connect', () => {
       this.setupDataChannelBuffer(peer, peerId);
       this.connectionRetries.set(peerId, 0);
@@ -85,7 +79,7 @@ export class WebRTCManager {
     // 버퍼 임계값 설정
     channel.bufferedAmountLowThreshold = BUFFER_LOW_THRESHOLD;
     
-    // 버퍼가 낮아졌을 때 이벤트
+    // 버퍼 낮음 이벤트
     channel.onbufferedamountlow = () => {
       this.events.onBufferLow?.(peerId);
     };
@@ -102,16 +96,17 @@ export class WebRTCManager {
     if (!peer || !peer.connected || peer.destroyed) {
       return false;
     }
-
+  
     const channel = (peer as any)._channel;
     if (!channel || channel.readyState !== 'open') {
       return false;
     }
-
+  
     const startTime = Date.now();
+    const MAX_BUFFER = 256 * 1024; // 256KB 버퍼 제한
     
-    // 버퍼가 가득 찬 경우 대기
-    while (channel.bufferedAmount > BUFFER_HIGH_THRESHOLD) {
+    // 버퍼가 가득 찰 때까지 대기
+    while (channel.bufferedAmount > MAX_BUFFER) {
       if (Date.now() - startTime > timeout) {
         console.warn(`[WebRTC] Send timeout for peer ${peerId}, buffer full`);
         return false;
@@ -121,14 +116,42 @@ export class WebRTCManager {
         return false;
       }
       
-      await new Promise(resolve => setTimeout(resolve, BUFFER_CHECK_INTERVAL));
+      // 더 긴 대기
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
-
+  
     try {
       peer.send(data);
       return true;
-    } catch (error) {
+    } catch (error: any) {
+      if (error.message?.includes('queue is full')) {
+        console.warn(`[WebRTC] Queue full for peer ${peerId}, will retry`);
+        return false;
+      }
       console.warn(`[WebRTC] Failed to send to peer ${peerId}:`, error);
+      return false;
+    }
+  }
+
+  // 특정 피어에게 메시지 전송 (신규 메서드)
+  public sendToPeer(peerId: string, message: any): boolean {
+    const peer = this.peers.get(peerId);
+    if (!peer || !peer.connected || peer.destroyed) {
+      console.warn(`[WebRTC] Cannot send to peer ${peerId}: not connected`);
+      return false;
+    }
+
+    try {
+      const channel = (peer as any)._channel;
+      if (!channel || channel.readyState !== 'open') {
+        console.warn(`[WebRTC] Cannot send to peer ${peerId}: channel not open`);
+        return false;
+      }
+
+      peer.send(message);
+      return true;
+    } catch (error) {
+      console.error(`[WebRTC] Failed to send to peer ${peerId}:`, error);
       return false;
     }
   }
@@ -155,12 +178,6 @@ export class WebRTCManager {
   }
 
   public removePeer(peerId: string): void {
-    const monitor = this.bufferMonitors.get(peerId);
-    if (monitor) {
-      clearInterval(monitor);
-      this.bufferMonitors.delete(peerId);
-    }
-    
     const peer = this.peers.get(peerId);
     if (peer) {
       try {
@@ -189,9 +206,9 @@ export class WebRTCManager {
             return;
           }
 
-          // 작은 메시지는 직접 전송
+          // 대용량 데이터 처리
           if (message instanceof ArrayBuffer && message.byteLength > BUFFER_HIGH_THRESHOLD) {
-            // 큰 메시지는 flow control 사용
+            // 비동기 flow control 사용
             this.sendWithFlowControl(peerId, message).then(success => {
               if (!success) {
                 console.warn(`[WebRTC] Flow control send failed for peer ${peerId}`);
@@ -254,9 +271,6 @@ export class WebRTCManager {
   }
 
   public destroyAll(): void {
-    this.bufferMonitors.forEach(monitor => clearInterval(monitor));
-    this.bufferMonitors.clear();
-    
     this.peers.forEach((peer, peerId) => {
       try {
         if (!peer.destroyed) {
@@ -280,18 +294,18 @@ export class WebRTCManager {
   }
 
   private handlePeerError(peerId: string, error: Error): void {
-    // OperationError는 일시적인 오류일 수 있음
+    // OperationError는 일반적으로 무시
     if (error.name === 'OperationError') {
       console.warn(`[WebRTC] Non-fatal OperationError on peer (${peerId}). Flow control will handle it. Error: ${error.message}`);
       return;
     }
 
-    // 재연결 시도
+    // 재시도 로직
     const retries = this.connectionRetries.get(peerId) || 0;
     if (retries < this.MAX_RETRIES) {
       console.warn(`[WebRTC] Error on peer ${peerId}, retry ${retries + 1}/${this.MAX_RETRIES}:`, error.message);
       this.connectionRetries.set(peerId, retries + 1);
-      // 재연결 로직은 상위 레벨에서 처리
+      // 재연결 로직은 상위 레이어에서 처리
     } else {
       console.error(`[WebRTC] Unrecoverable fatal error on peer (${peerId}), removing peer:`, error);
       this.events.onError(peerId, error);

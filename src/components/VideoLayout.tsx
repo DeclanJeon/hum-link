@@ -3,22 +3,26 @@ import { usePeerConnectionStore } from "@/stores/usePeerConnectionStore";
 import { useUIManagementStore } from "@/stores/useUIManagementStore";
 import { useMediaDeviceStore } from "@/stores/useMediaDeviceStore";
 import { useTranscriptionStore } from "@/stores/useTranscriptionStore";
+import { useSessionStore } from "@/stores/useSessionStore";
 import { Loader2 } from "lucide-react";
 import { SubtitleOverlay } from './SubtitleOverlay';
 
 export const VideoLayout = () => {
-  // --- 스토어에서 직접 상태 가져오기 ---
+  // --- 스토어 상태 가져오기 ---
   const { viewMode } = useUIManagementStore();
   const { localStream, isVideoEnabled } = useMediaDeviceStore();
   const { peers } = usePeerConnectionStore();
   const { localTranscript, transcriptionLanguage, translationTargetLanguage } = useTranscriptionStore();
+  const { getSessionInfo } = useSessionStore();
   
-  const localNickname = 'You'; 
+  const sessionInfo = getSessionInfo();
+  const localNickname = sessionInfo?.nickname || 'You';
+  const localUserId = sessionInfo?.userId || 'local';
 
   const allParticipants = [
     {
       isLocal: true,
-      userId: 'local',
+      userId: localUserId,
       nickname: localNickname,
       stream: localStream,
       videoEnabled: isVideoEnabled,

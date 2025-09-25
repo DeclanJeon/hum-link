@@ -7,9 +7,8 @@ const MAX_MESSAGE_SIZE = 16 * 1024; // 16KB - DataChannel의 안전한 크기
 const MAX_CHUNK_SIZE = 64 * 1024; // 64KB - 최대 청크 크기 제한
 
 // 파일 크기에 따른 최적 청크 크기 계산 (64KB 제한)
+// 파일 크기별 청크 크기 최적화
 export const calculateOptimalChunkSize = (fileSize: number): number => {
-  // DataChannel 안정성을 위해 최대 64KB로 제한
-  
   // 매우 작은 파일 (< 100KB): 16KB 청크
   if (fileSize < 100 * 1024) {
     return 16 * 1024;
@@ -18,8 +17,28 @@ export const calculateOptimalChunkSize = (fileSize: number): number => {
   if (fileSize < 1024 * 1024) {
     return 32 * 1024;
   }
-  // 모든 파일: 64KB 청크 (안정성 우선)
+  // 중간 파일 (< 10MB): 64KB 청크
+  if (fileSize < 10 * 1024 * 1024) {
+    return 64 * 1024;
+  }
   return MAX_CHUNK_SIZE;
+};
+
+// 파일 크기 제한 (1GB)
+export const isValidFileSize = (
+  fileSize: number,
+  maxSize: number = 1024 * 1024 * 1024 * 50
+): boolean => {
+  return fileSize > 0 && fileSize <= maxSize;
+};
+
+// 파일 크기 포맷팅
+export const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 
 // 네트워크 상태에 따른 청크 크기 조정 (향후 확장용)
@@ -141,12 +160,4 @@ export const isValidFileType = (file: File): boolean => {
   ];
   
   return !dangerousTypes.includes(file.type);
-};
-
-// 파일 크기 제한 검증 (기본 500MB)
-export const isValidFileSize = (
-  fileSize: number,
-  maxSize: number = 500 * 1024 * 1024
-): boolean => {
-  return fileSize > 0 && fileSize <= maxSize;
 };

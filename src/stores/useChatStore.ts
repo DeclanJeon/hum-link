@@ -25,6 +25,7 @@ export interface FileTransferProgress {
   endSignalReceived: boolean;
   lastActivityTime: number;
   missingChunks?: number[];
+  lastProgressUpdate?: number;
 }
 
 export type MessageType = 'text' | 'file';
@@ -45,20 +46,45 @@ interface ChatState {
   fileTransfers: Map<string, FileTransferProgress>;
   pendingChunks: Map<string, ArrayBuffer[]>;
   endSignalsReceived: Set<string>;
+  progressUpdateTimers: Map<string, NodeJS.Timeout>;
 }
 
 interface ChatActions {
   addMessage: (message: ChatMessage) => void;
   addFileMessage: (senderId: string, senderNickname: string, fileMeta: FileMetadata, isLocal?: boolean) => Promise<void>;
-  updateFileProgress: (transferId: string, loaded: number) => void;
-  appendFileChunk: (transferId: string, index: number, chunk: ArrayBuffer, isLastChunk?: boolean) => Promise<void>;
-  addPendingChunk: (peerId: string, chunk: ArrayBuffer) => void;
-  processPendingChunks: (peerId: string, transferId: string) => Promise<void>;
+  updateFileProgress: (transferId: string, loaded: number, immediate?: boolean) => void;
+  appendFileChunk: (transferId: string, index: number, chunk: ArrayBuffer, senderId: string, isLastChunk?: boolean) => Promise<void>;
+  addPendingChunk: (transferId: string, chunk: ArrayBuffer) => void;
+  processPendingChunks: (transferId: string) => Promise<void>;
   handleIncomingChunk: (peerId: string, receivedData: ArrayBuffer | Uint8Array) => Promise<void>;
   checkAndAssembleIfComplete: (transferId: string) => Promise<void>;
   setTypingState: (userId: string, nickname: string, isTyping: boolean) => void;
   applyRemoteDrawEvent: (event: any) => void;
   clearChat: () => void;
+}
+
+function parseChunkHeader(buffer: ArrayBuffer): { type: number; transferId: string; chunkIndex?: number; data?: ArrayBuffer } | null {
+  if (buffer.byteLength < 3) return null;
+  
+  const view = new DataView(buffer);
+  const type = view.getUint8(0);
+  const idLength = view.getUint16(1, false);
+  
+  if (buffer.byteLength < 3 + idLength) return null;
+  
+  const transferIdBytes = new Uint8Array(buffer, 3, idLength);
+  const transferId = new TextDecoder().decode(transferIdBytes);
+  
+  if (type === 1) {
+    if (buffer.byteLength < 3 + idLength + 4) return null;
+    const chunkIndex = view.getUint32(3 + idLength, false);
+    const data = buffer.slice(3 + idLength + 4);
+    return { type, transferId, chunkIndex, data };
+  } else if (type === 2) {
+    return { type, transferId };
+  }
+  
+  return null;
 }
 
 export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
@@ -67,6 +93,7 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
   fileTransfers: new Map(),
   pendingChunks: new Map(),
   endSignalsReceived: new Set(),
+  progressUpdateTimers: new Map(),
 
   handleIncomingChunk: async (peerId, receivedData) => {
     const chunkBuffer = (receivedData instanceof Uint8Array)
@@ -78,79 +105,69 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
         return;
     }
 
+    const parsed = parseChunkHeader(chunkBuffer);
+    if (!parsed) {
+      console.warn('[FILE_RECEIVE] Failed to parse chunk header');
+      return;
+    }
+
+    const { type, transferId, chunkIndex, data } = parsed;
     const { fileTransfers, chatMessages, appendFileChunk, addPendingChunk, endSignalsReceived } = get();
     
-    // 현재 수신 중인 전송 찾기
-    const receivingTransfer = Array.from(fileTransfers.entries()).find(([transferId, v]) => {
-        const message = chatMessages.find(m => m.id === transferId);
-        return message && message.senderId === peerId && v.isReceiving && !v.isComplete;
-    });
+    const transfer = fileTransfers.get(transferId);
+    const message = chatMessages.find(m => m.id === transferId);
+    
+    if (!transfer || !message) {
+      console.log(`[FILE_RECEIVE] Transfer not found for ${transferId}, adding to pending`);
+      addPendingChunk(transferId, chunkBuffer);
+      return;
+    }
 
-    if (receivingTransfer) {
-        const transferId = receivingTransfer[0];
-        const view = new DataView(chunkBuffer);
-        const type = view.getUint8(0);
-
-        if (type === 1 && chunkBuffer.byteLength >= 5) {
-            // 데이터 청크
-            const index = view.getUint32(1);
-            const chunk = chunkBuffer.slice(5);
-            
-            // 청크 인덱스 유효성 검증
-            const message = chatMessages.find(m => m.id === transferId);
-            if (message?.fileMeta && !isValidChunkIndex(index, message.fileMeta.totalChunks)) {
-                console.error(`[FILE_RECEIVE] Invalid chunk index: ${index} for transfer ${transferId}`);
-                return;
-            }
-            
-            console.log(`[FILE_RECEIVE] Data chunk received: ${index} for ${transferId}, size: ${chunk.byteLength}`);
-            
-            // 즉시 처리
-            await appendFileChunk(transferId, index, chunk, false);
-            
-        } else if (type === 2) {
-            // End Signal - 중복 처리 방지
-            if (!endSignalsReceived.has(transferId)) {
-                endSignalsReceived.add(transferId);
-                console.log(`[FILE_RECEIVE] End signal received for ${transferId}`);
-                
-                set(produce((state: ChatState) => {
-                    const transfer = state.fileTransfers.get(transferId);
-                    if (transfer) {
-                        transfer.endSignalReceived = true;
-                    }
-                }));
-                
-                // 1초 후 완료 체크
-                setTimeout(() => {
-                    get().checkAndAssembleIfComplete(transferId);
-                }, 1000);
-            } else {
-                console.log(`[FILE_RECEIVE] Duplicate End signal ignored for ${transferId}`);
-            }
-        }
-    } else {
-        console.log('[FILE_RECEIVE] No active transfer found, adding to pending chunks');
-        addPendingChunk(peerId, chunkBuffer);
+    if (type === 1 && typeof chunkIndex === 'number' && data) {
+      if (message.fileMeta && !isValidChunkIndex(chunkIndex, message.fileMeta.totalChunks)) {
+        console.error(`[FILE_RECEIVE] Invalid chunk index: ${chunkIndex} for transfer ${transferId}`);
+        return;
+      }
+      
+      console.log(`[FILE_RECEIVE] Data chunk received: ${chunkIndex} for ${transferId}, size: ${data.byteLength}`);
+      await appendFileChunk(transferId, chunkIndex, data, message.senderId, false);
+      
+    } else if (type === 2) {
+      if (!endSignalsReceived.has(transferId)) {
+        endSignalsReceived.add(transferId);
+        console.log(`[FILE_RECEIVE] End signal received for ${transferId}`);
+        
+        set(produce((state: ChatState) => {
+          const transfer = state.fileTransfers.get(transferId);
+          if (transfer) {
+            transfer.endSignalReceived = true;
+          }
+        }));
+        
+        setTimeout(() => {
+          get().checkAndAssembleIfComplete(transferId);
+        }, 1000);
+      } else {
+        console.log(`[FILE_RECEIVE] Duplicate End signal ignored for ${transferId}`);
+      }
     }
   },
 
-  addPendingChunk: (peerId, chunk) => set(produce((state: ChatState) => {
-    if (!state.pendingChunks.has(peerId)) {
-      state.pendingChunks.set(peerId, []);
+  addPendingChunk: (transferId, chunk) => set(produce((state: ChatState) => {
+    if (!state.pendingChunks.has(transferId)) {
+      state.pendingChunks.set(transferId, []);
     }
-    state.pendingChunks.get(peerId)!.push(chunk);
+    state.pendingChunks.get(transferId)!.push(chunk);
     
-    // 펜딩 청크가 너무 많이 쌓이지 않도록 제한
-    const pending = state.pendingChunks.get(peerId)!;
+    const pending = state.pendingChunks.get(transferId)!;
     if (pending.length > 1000) {
-      console.warn(`[FILE_RECEIVE] Too many pending chunks for ${peerId}, clearing old ones`);
-      state.pendingChunks.set(peerId, pending.slice(-500));
+      console.warn(`[FILE_RECEIVE] Too many pending chunks for ${transferId}, clearing old ones`);
+      state.pendingChunks.set(transferId, pending.slice(-500));
     }
   })),
 
-  processPendingChunks: async (peerId, transferId) => {
-    const pending = get().pendingChunks.get(peerId);
+  processPendingChunks: async (transferId) => {
+    const pending = get().pendingChunks.get(transferId);
     if (pending && pending.length > 0) {
       console.log(`[FILE_RECEIVE] Processing ${pending.length} pending chunks for ${transferId}`);
       
@@ -158,20 +175,18 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
       const message = chatMessages.find(m => m.id === transferId);
       
       for (const chunkBuffer of pending) {
-        const view = new DataView(chunkBuffer);
-        const type = view.getUint8(0);
+        const parsed = parseChunkHeader(chunkBuffer);
+        if (!parsed) continue;
         
-        if (type === 1 && chunkBuffer.byteLength >= 5) {
-          const index = view.getUint32(1);
-          
-          // 청크 인덱스 유효성 검증
-          if (message?.fileMeta && !isValidChunkIndex(index, message.fileMeta.totalChunks)) {
-            console.error(`[FILE_RECEIVE] Invalid pending chunk index: ${index}`);
+        const { type, chunkIndex, data } = parsed;
+        
+        if (type === 1 && typeof chunkIndex === 'number' && data) {
+          if (message?.fileMeta && !isValidChunkIndex(chunkIndex, message.fileMeta.totalChunks)) {
+            console.error(`[FILE_RECEIVE] Invalid pending chunk index: ${chunkIndex}`);
             continue;
           }
           
-          const chunk = chunkBuffer.slice(5);
-          await get().appendFileChunk(transferId, index, chunk, false);
+          await get().appendFileChunk(transferId, chunkIndex, data, message!.senderId, false);
         } else if (type === 2) {
           if (!endSignalsReceived.has(transferId)) {
             endSignalsReceived.add(transferId);
@@ -187,10 +202,9 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
       }
       
       set(produce((state: ChatState) => { 
-        state.pendingChunks.delete(peerId); 
+        state.pendingChunks.delete(transferId); 
       }));
       
-      // 처리 후 완료 체크
       setTimeout(() => {
         get().checkAndAssembleIfComplete(transferId);
       }, 500);
@@ -200,7 +214,6 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
   addFileMessage: async (senderId, senderNickname, fileMeta, isLocal = false) => {
     console.log(`[FILE_RECEIVE] Adding file message: ${fileMeta.transferId}, isLocal: ${isLocal}, totalChunks: ${fileMeta.totalChunks}`);
     
-    // 중복 메시지 방지
     const existingMessage = get().chatMessages.find(msg => msg.id === fileMeta.transferId);
     if (existingMessage) {
       console.log(`[FILE_RECEIVE] File message already exists: ${fileMeta.transferId}`);
@@ -228,13 +241,14 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
         receivedChunks: new Set(), 
         endSignalReceived: false,
         lastActivityTime: Date.now(),
-        missingChunks: []
+        missingChunks: [],
+        lastProgressUpdate: Date.now()
       });
     }));
     
     if (!isLocal) {
       await initDB();
-      await get().processPendingChunks(senderId, fileMeta.transferId);
+      await get().processPendingChunks(fileMeta.transferId);
     }
   },
 
@@ -244,18 +258,65 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
     }
   })),
   
-  updateFileProgress: (transferId, loaded) => {
+  // 🔥 핵심 수정: 즉시 업데이트 지원
+  updateFileProgress: (transferId, loaded, immediate = false) => {
+    const { progressUpdateTimers } = get();
+    
+    // 기존 타이머 클리어
+    const existingTimer = progressUpdateTimers.get(transferId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    
+    const doUpdate = () => {
       set(produce((state) => {
         const transfer = state.fileTransfers.get(transferId);
         const message = state.chatMessages.find((m) => m.id === transferId);
+        
         if (transfer && message?.fileMeta) {
-          transfer.progress = loaded / message.fileMeta.size;
-          transfer.lastActivityTime = Date.now();
+          const newProgress = Math.min(1, loaded / message.fileMeta.size);
+          
+          // 부드러운 진행률 업데이트 - 0.1% 이상 변경 시에만 업데이트
+          if (Math.abs(newProgress - transfer.progress) > 0.001 || newProgress >= 1) {
+            transfer.progress = newProgress;
+            transfer.lastActivityTime = Date.now();
+            transfer.lastProgressUpdate = Date.now();
+            
+            // 디버그 로그 (5% 단위로만)
+            const prevPercent = Math.floor(transfer.progress * 20);
+            const newPercent = Math.floor(newProgress * 20);
+            if (prevPercent !== newPercent) {
+              console.log(`[FILE_PROGRESS] ${transferId}: ${(newProgress * 100).toFixed(1)}%`);
+            }
+          }
+          
+          // 완료 체크
+          if (newProgress >= 1 && !transfer.isComplete) {
+            transfer.isComplete = true;
+            transfer.isSending = false;
+            console.log(`[FILE_PROGRESS] Upload complete: ${transferId}`);
+          }
         }
+        
+        // 타이머 정리
+        state.progressUpdateTimers.delete(transferId);
       }));
+    };
+    
+    if (immediate) {
+      doUpdate(); // 즉시 실행
+    } else {
+      // 송신 시 더 빠른 업데이트 (50ms)
+      const transfer = get().fileTransfers.get(transferId);
+      const delay = transfer?.isSending ? 50 : 100;
+      const timer = setTimeout(doUpdate, delay);
+      set(produce(state => {
+        state.progressUpdateTimers.set(transferId, timer);
+      }));
+    }
   },
   
-  appendFileChunk: async (transferId, index, chunk, isLastChunk = false) => {
+  appendFileChunk: async (transferId, index, chunk, senderId, isLastChunk = false) => {
     const { fileTransfers, chatMessages } = get();
     const transfer = fileTransfers.get(transferId);
     const message = chatMessages.find(m => m.id === transferId);
@@ -264,91 +325,69 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
       console.error(`[FILE_RECEIVE] Transfer or message not found: ${transferId}`);
       return;
     }
-
-    // 중복 청크 체크
+  
     if (transfer.receivedChunks.has(index)) {
-      console.log(`[FILE_RECEIVE] Duplicate chunk ignored: ${index}`);
       return;
     }
-
-    // 청크 인덱스 유효성 재검증
+  
     if (!isValidChunkIndex(index, message.fileMeta.totalChunks)) {
-      console.error(`[FILE_RECEIVE] Invalid chunk index in appendFileChunk: ${index}`);
+      console.error(`[FILE_RECEIVE] Invalid chunk index: ${index}`);
       return;
     }
-
-    // ACK 전송 (End Signal 제외)
+  
     if (!isLastChunk && index >= 0) {
-      const { sendToAllPeers } = usePeerConnectionStore.getState();
+      const { sendToPeer } = usePeerConnectionStore.getState();
       const ackMessage = JSON.stringify({
-          type: 'file-ack',
-          payload: { transferId, chunkIndex: index }
+        type: 'file-ack',
+        payload: { transferId, chunkIndex: index }
       });
-      sendToAllPeers(ackMessage);
-      console.log(`[FILE_RECEIVE] ACK sent for chunk ${index}`);
-    }
-
-    // 청크 저장
-    if (!isLastChunk && index >= 0) {
-      try {
-        await saveChunk(transferId, index, chunk);
-        console.log(`[FILE_RECEIVE] Chunk ${index} saved to IndexedDB`);
-      } catch (error) {
-        console.error(`[FILE_RECEIVE] Failed to save chunk ${index}:`, error);
-        return;
+      
+      const ackSent = sendToPeer(senderId, ackMessage);
+      if (!ackSent) {
+        console.warn(`[FILE_RECEIVE] Failed to send ACK for chunk ${index}`);
+        setTimeout(() => {
+          sendToPeer(senderId, ackMessage);
+        }, 100);
       }
     }
-
+  
+    if (!isLastChunk && index >= 0) {
+      saveChunk(transferId, index, chunk).catch(error => {
+        console.error(`[FILE_RECEIVE] Failed to save chunk ${index}:`, error);
+      });
+    }
+  
     set(produce((state: ChatState) => {
       const transfer = state.fileTransfers.get(transferId);
       if (!transfer) return;
-
-      if (!isLastChunk && index >= 0) {
-        transfer.receivedChunks.add(index);
-        console.log(`[FILE_RECEIVE] Chunk ${index} added, total received: ${transfer.receivedChunks.size}`);
-      }
-
+  
+      transfer.receivedChunks.add(index);
+      
       const message = state.chatMessages.find(m => m.id === transferId);
       if (message?.fileMeta) {
         const receivedCount = transfer.receivedChunks.size;
         const totalCount = message.fileMeta.totalChunks;
-        transfer.progress = receivedCount / totalCount;
         
-        // 진행 상황 로그
-        if (receivedCount % 50 === 0 || receivedCount === totalCount) {
-          console.log(`[FILE_RECEIVE] Progress: ${receivedCount}/${totalCount} chunks (${(transfer.progress * 100).toFixed(1)}%)`);
-        }
+        const rawProgress = receivedCount / totalCount;
+        const smoothedProgress = transfer.progress * 0.3 + rawProgress * 0.7;
         
-        // 누락된 청크 확인
-        if (receivedCount < totalCount) {
-          const missing: number[] = [];
-          for (let i = 0; i < totalCount; i++) {
-            if (!transfer.receivedChunks.has(i)) {
-              missing.push(i);
-            }
-          }
-          transfer.missingChunks = missing;
-          
-          if (missing.length > 0 && missing.length <= 10) {
-            console.log(`[FILE_RECEIVE] Missing chunks: ${missing.join(', ')}`);
-          }
-        } else {
-          transfer.missingChunks = [];
+        transfer.progress = Math.min(smoothedProgress, rawProgress);
+        transfer.lastActivityTime = Date.now();
+        
+        if (Math.floor(rawProgress * 20) !== Math.floor((transfer.progress || 0) * 20)) {
+          console.log(
+            `[FILE_RECEIVE] Progress: ${(rawProgress * 100).toFixed(1)}% ` +
+            `(${receivedCount}/${totalCount} chunks)`
+          );
         }
       }
-      
-      transfer.lastActivityTime = Date.now();
     }));
     
-    // 주기적으로 완료 체크
     const updatedTransfer = get().fileTransfers.get(transferId);
-    const updatedMessage = get().chatMessages.find(m => m.id === transferId);
-    
-    if (updatedTransfer && updatedMessage?.fileMeta) {
+    if (updatedTransfer && message?.fileMeta) {
       const receivedCount = updatedTransfer.receivedChunks.size;
-      const totalCount = updatedMessage.fileMeta.totalChunks;
+      const totalCount = message.fileMeta.totalChunks;
       
-      // 모든 청크를 받았거나, End Signal을 받았을 때 체크
       if (receivedCount === totalCount || updatedTransfer.endSignalReceived) {
         setTimeout(() => {
           get().checkAndAssembleIfComplete(transferId);
@@ -374,16 +413,14 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
     console.log(`  - End Signal: ${transfer.endSignalReceived}`);
     console.log(`  - Missing chunks: ${transfer.missingChunks?.length || 0}`);
 
-    // 두 조건 중 하나만 만족해도 시도
     const shouldAssemble = 
-      (transfer.endSignalReceived && receivedCount === totalCount) || // 정상 케이스
-      (receivedCount === totalCount) || // End Signal 없이 모든 청크 받음
-      (transfer.endSignalReceived && receivedCount >= totalCount - 1); // 마지막 청크 1개 누락 허용
+      (transfer.endSignalReceived && receivedCount === totalCount) ||
+      (receivedCount === totalCount) ||
+      (transfer.endSignalReceived && receivedCount >= totalCount - 1);
 
     if (shouldAssemble) {
       console.log(`[FILE_RECEIVE] Starting assembly for ${transferId}`);
       
-      // 조립 전 짧은 지연 (IndexedDB 쓰기 완료 대기)
       await new Promise(resolve => setTimeout(resolve, 200));
       
       try {
@@ -393,9 +430,8 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
           console.log(`  - Expected size: ${message.fileMeta.size}`);
           console.log(`  - Actual size: ${blob.size}`);
           
-          // 크기 검증 (약간의 오차 허용)
           const sizeDiff = Math.abs(blob.size - message.fileMeta.size);
-          const sizeMatch = sizeDiff < 1024; // 1KB 오차 허용
+          const sizeMatch = sizeDiff < 1024;
           
           if (!sizeMatch) {
             console.warn(`[FILE_RECEIVE] Size mismatch! Expected: ${message.fileMeta.size}, Got: ${blob.size}`);
@@ -411,11 +447,9 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
               console.log(`[FILE_RECEIVE] Transfer marked as complete: ${transferId}`);
             }
             
-            // End Signal 정리
             s.endSignalsReceived.delete(transferId);
           }));
           
-          // IndexedDB 청크 삭제
           setTimeout(() => {
             deleteFileChunks(transferId).catch(error => {
               console.error(`[FILE_RECEIVE] Failed to delete chunks:`, error);
@@ -428,7 +462,6 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
         console.error(`[FILE_RECEIVE] Assembly error for ${transferId}:`, error);
       }
     } else {
-      // 타임아웃 체크
       const inactiveTime = Date.now() - transfer.lastActivityTime;
       if (inactiveTime > 30000) {
         console.error(`[FILE_RECEIVE] Transfer timeout for ${transferId}`);
@@ -437,11 +470,9 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
           if (t) {
             t.isReceiving = false;
           }
-          // 타임아웃 시 End Signal 정리
           s.endSignalsReceived.delete(transferId);
         }));
         
-        // 타임아웃 시 청크 정리
         setTimeout(() => {
           deleteFileChunks(transferId).catch(error => {
             console.error(`[FILE_RECEIVE] Failed to delete chunks after timeout:`, error);
@@ -466,7 +497,9 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
   },
 
   clearChat: () => {
-    // Blob URL 정리
+    const { progressUpdateTimers } = get();
+    progressUpdateTimers.forEach(timer => clearTimeout(timer));
+    
     get().fileTransfers.forEach(transfer => {
       if (transfer.blobUrl) {
         URL.revokeObjectURL(transfer.blobUrl);
@@ -478,7 +511,8 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
       isTyping: new Map(), 
       fileTransfers: new Map(), 
       pendingChunks: new Map(),
-      endSignalsReceived: new Set()
+      endSignalsReceived: new Set(),
+      progressUpdateTimers: new Map()
     });
   },
 }));
