@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { ArrowRight } from "lucide-react";
 import { useLandingStore } from "@/stores/useLandingStore";
 import { useRoomStore } from "@/stores/useRoomStore";
 import { RoomTypeSelector } from "@/components/RoomTypeSelector";
@@ -180,14 +181,38 @@ const Landing = () => {
           {/* Right Column: Active Rooms */}
           <div className="space-y-6">
             <div className="bg-card/50 backdrop-blur-sm rounded-lg border border-border/50 p-6">
-              <h2 className="text-2xl font-semibold mb-6">활성 방 목록</h2>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-semibold">활성 방 목록</h2>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => navigate('/rooms')}
+                  className="gap-2"
+                >
+                  전체 보기
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </div>
               
               <ActiveRoomsList 
-                rooms={rooms}
+                rooms={rooms.slice(0, 4)} // Show only first 4 rooms on landing
                 onJoinRoom={handleJoinRoom}
                 onDeleteRoom={deleteRoom}
                 currentUserId={nickname}
               />
+              
+              {rooms.length > 4 && (
+                <div className="text-center mt-4">
+                  <Button 
+                    variant="ghost" 
+                    onClick={() => navigate('/rooms')}
+                    className="gap-2"
+                  >
+                    {rooms.length - 4}개 방 더 보기
+                    <ArrowRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         </div>

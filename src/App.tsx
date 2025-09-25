@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Landing from "./pages/Landing";
 import Lobby from "./pages/Lobby";
 import Room from "./pages/Room";
+import Rooms from "./pages/Rooms";
 import NotFound from "./pages/NotFound";
 import { GlobalConnectionStatus } from "./components/GlobalConnectionStatus";
 import { EnvError } from "./config"; // 환경 변수 에러를 가져옵니다.
@@ -44,6 +45,7 @@ const App = () => {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Landing />} />
+            <Route path="/rooms" element={<Rooms />} />
             <Route path="/lobby" element={<Lobby />} />
             <Route path="/lobby/:roomTitle" element={<Lobby />} />
             <Route path="/room/:roomTitle" element={<Room />} />
