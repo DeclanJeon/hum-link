@@ -1,54 +1,106 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { VoiceVisualizer } from "@/components/VoiceVisualizer";
 import { DeviceSelector } from "@/components/DeviceSelector";
 import { VideoPreview } from "@/components/VideoPreview";
 import { toast } from "sonner";
-import { Mic, MicOff, Video, VideoOff } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, Volume2, CheckCircle, AlertCircle } from "lucide-react";
 import { useLobbyStore } from "@/stores/useLobbyStore";
 import { useSessionStore } from "@/stores/useSessionStore";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { nanoid } from 'nanoid';
+import { cn } from "@/lib/utils";
+
+// 음성 레벨 인디케이터 컴포넌트
+const AudioLevelIndicator = ({ audioLevel, isEnabled }: { audioLevel: number; isEnabled: boolean }) => {
+  const getBarColor = (threshold: number) => {
+    if (!isEnabled) return 'bg-muted';
+    if (audioLevel > threshold) {
+      if (audioLevel > 0.7) return 'bg-red-500';
+      if (audioLevel > 0.5) return 'bg-yellow-500';
+      return 'bg-green-500';
+    }
+    return 'bg-muted/50';
+  };
+
+  const bars = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
+        {isEnabled ? (
+          <Volume2 className="w-4 h-4 text-muted-foreground" />
+        ) : (
+          <MicOff className="w-4 h-4 text-muted-foreground" />
+        )}
+      </div>
+      <div className="flex items-end gap-0.5 h-8">
+        {bars.map((threshold, index) => (
+          <div
+            key={index}
+            className={cn(
+              "w-1 transition-all duration-100 rounded-full",
+              getBarColor(threshold)
+            )}
+            style={{ 
+              height: `${(index + 1) * 12.5}%`,
+              opacity: audioLevel > threshold ? 1 : 0.3
+            }}
+          />
+        ))}
+      </div>
+      <div className="text-xs text-muted-foreground min-w-[60px]">
+        {!isEnabled ? (
+          <span className="text-red-500">Muted</span>
+        ) : audioLevel > 0.1 ? (
+          <span className="text-green-500">Active</span>
+        ) : (
+          <span>Silent</span>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const Lobby = () => {
   const navigate = useNavigate();
   const { roomTitle } = useParams<{ roomTitle: string }>();
   const location = useLocation();
+  const isMobile = useIsMobile();
 
   const {
     connectionDetails, isAudioEnabled, isVideoEnabled, audioLevel,
     selectedAudioDevice, selectedVideoDevice, audioDevices, videoDevices, stream,
-    initialize, toggleAudio, toggleVideo, setSelectedAudioDevice, setSelectedVideoDevice, cleanup
+    initialize, toggleAudio, toggleVideo, setSelectedAudioDevice, setSelectedVideoDevice, cleanup,
+    mediaCapabilities
   } = useLobbyStore();
 
   const { setSession } = useSessionStore();
-
   const joiningRef = useRef(false);
 
   const handleJoinRoom = () => {
     const { isAudioEnabled, isVideoEnabled, selectedAudioDevice, selectedVideoDevice, connectionDetails } = useLobbyStore.getState();
 
     if (!connectionDetails) {
-        toast.error("Connection details are not available.");
-        return;
+      toast.error("Connection details are not available.");
+      return;
     }
     
     joiningRef.current = true;
     
-    // Generate unique userId and set session
     const userId = nanoid();
     setSession(userId, connectionDetails.nickname, connectionDetails.roomTitle);
     
     navigate(`/room/${encodeURIComponent(connectionDetails.roomTitle)}`, {
-        state: {
-            connectionDetails: { ...connectionDetails, userId },
-            mediaPreferences: {
-                audioEnabled: isAudioEnabled,
-                videoEnabled: isVideoEnabled,
-                audioDeviceId: selectedAudioDevice,
-                videoDeviceId: selectedVideoDevice,
-            }
+      state: {
+        connectionDetails: { ...connectionDetails, userId },
+        mediaPreferences: {
+          audioEnabled: isAudioEnabled,
+          videoEnabled: isVideoEnabled,
+          audioDeviceId: selectedAudioDevice,
+          videoDeviceId: selectedVideoDevice,
         }
+      }
     });
 
     toast.success("Joining the conversation...");
@@ -83,19 +135,126 @@ const Lobby = () => {
   };
 
   if (!connectionDetails) {
-    return <div className="min-h-screen bg-background flex items-center justify-center"><p>Loading room...</p></div>;
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <p>Loading room...</p>
+      </div>
+    );
   }
 
+  // 모바일 레이아웃
+  if (isMobile) {
+    return (
+      <div className="min-h-screen bg-background overflow-y-auto">
+        <div className="flex flex-col p-4 pb-24">
+          {/* 헤더 */}
+          <div className="text-center mb-6">
+            <h1 className="text-2xl font-bold text-foreground mb-2">Get Ready</h1>
+            <p className="text-sm text-muted-foreground">
+              Room: <span className="text-primary font-medium">"{connectionDetails.roomTitle}"</span>
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Nickname: <span className="text-accent font-medium">{connectionDetails.nickname}</span>
+            </p>
+          </div>
+
+          {/* 비디오 프리뷰 */}
+          <div className="mb-6 aspect-video rounded-lg overflow-hidden bg-muted">
+            <VideoPreview
+              stream={stream}
+              isVideoEnabled={isVideoEnabled}
+              nickname={connectionDetails.nickname || "You"}
+              isLocalVideo={true}
+            />
+          </div>
+
+          {/* 음성 체크 카드 */}
+          <div className="bg-card/50 backdrop-blur-sm rounded-lg p-4 mb-4 border border-border/50">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium">Audio Check</h3>
+              {mediaCapabilities?.hasMicrophone ? (
+                audioLevel > 0.1 && isAudioEnabled ? (
+                  <div className="flex items-center gap-1 text-green-500">
+                    <CheckCircle className="w-4 h-4" />
+                    <span className="text-xs">Working</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 text-yellow-500">
+                    <AlertCircle className="w-4 h-4" />
+                    <span className="text-xs">{isAudioEnabled ? "No sound" : "Muted"}</span>
+                  </div>
+                )
+              ) : (
+                <div className="flex items-center gap-1 text-red-500">
+                  <AlertCircle className="w-4 h-4" />
+                  <span className="text-xs">No mic</span>
+                </div>
+              )}
+            </div>
+            <AudioLevelIndicator audioLevel={audioLevel} isEnabled={isAudioEnabled} />
+          </div>
+
+          {/* 컨트롤 버튼 */}
+          <div className="flex gap-3 mb-6">
+            <Button
+              variant={isAudioEnabled ? "default" : "destructive"}
+              size="lg"
+              onClick={toggleAudio}
+              className="flex-1"
+              disabled={!mediaCapabilities?.hasMicrophone}
+            >
+              {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+            </Button>
+            <Button
+              variant={isVideoEnabled ? "default" : "destructive"}
+              size="lg"
+              onClick={() => toggleVideo(toast)}
+              className="flex-1"
+              disabled={!mediaCapabilities?.hasCamera}
+            >
+              {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+            </Button>
+          </div>
+
+          {/* 디바이스 선택 */}
+          <div className="bg-card/50 backdrop-blur-sm rounded-lg p-4 mb-6 border border-border/50">
+            <h3 className="text-sm font-medium mb-3">Devices</h3>
+            <DeviceSelector
+              audioDevices={audioDevices}
+              videoDevices={videoDevices}
+              selectedAudioDevice={selectedAudioDevice}
+              selectedVideoDevice={selectedVideoDevice}
+              onAudioDeviceChange={handleAudioDeviceChange}
+              onVideoDeviceChange={handleVideoDeviceChange}
+            />
+          </div>
+        </div>
+
+        {/* 하단 고정 Join 버튼 */}
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/95 backdrop-blur-xl border-t border-border/50">
+          <Button 
+            onClick={handleJoinRoom} 
+            className="w-full h-12 text-lg btn-connection"
+          >
+            Join Conversation
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // 데스크톱 레이아웃
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
-      <div className="max-w-4xl w-full">
+      <div className="max-w-5xl w-full">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-foreground mb-2">Get Ready to Connect</h1>
           <p className="text-muted-foreground">
             Joining <span className="text-primary font-medium">"{connectionDetails.roomTitle}"</span> as{" "}
-            <span className="text-accent font-medium">{connectionDetails.nickname || '...'}</span>
+            <span className="text-accent font-medium">{connectionDetails.nickname}</span>
           </p>
         </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2">
             <VideoPreview
@@ -105,16 +264,26 @@ const Lobby = () => {
               isLocalVideo={true}
             />
           </div>
+
           <div className="space-y-6">
+            {/* 음성 체크 */}
             <div className="control-panel">
-              <h3 className="font-medium text-foreground mb-4">Voice Check</h3>
-              <div className="h-16 flex items-center justify-center">
-                <VoiceVisualizer audioLevel={audioLevel} isActive={isAudioEnabled} size="large" />
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium text-foreground">Audio Check</h3>
+                {mediaCapabilities?.hasMicrophone && audioLevel > 0.1 && isAudioEnabled && (
+                  <div className="flex items-center gap-1 text-green-500 text-sm">
+                    <CheckCircle className="w-4 h-4" />
+                    <span>Clear</span>
+                  </div>
+                )}
               </div>
-              {isAudioEnabled && audioLevel > 0.1 && (
-                <p className="text-success text-sm mt-2">✓ Your voice sounds clear!</p>
+              <AudioLevelIndicator audioLevel={audioLevel} isEnabled={isAudioEnabled} />
+              {!mediaCapabilities?.hasMicrophone && (
+                <p className="text-xs text-yellow-500 mt-2">No microphone detected</p>
               )}
             </div>
+
+            {/* 디바이스 선택 */}
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Devices</h3>
               <DeviceSelector
@@ -126,19 +295,34 @@ const Lobby = () => {
                 onVideoDeviceChange={handleVideoDeviceChange}
               />
             </div>
+
+            {/* 컨트롤 */}
             <div className="control-panel">
               <h3 className="font-medium text-foreground mb-4">Controls</h3>
               <div className="flex gap-3">
-                <Button variant={isAudioEnabled ? "default" : "destructive"} size="lg" onClick={toggleAudio} className="flex-1">
+                <Button 
+                  variant={isAudioEnabled ? "default" : "destructive"} 
+                  size="lg" 
+                  onClick={toggleAudio} 
+                  className="flex-1"
+                  disabled={!mediaCapabilities?.hasMicrophone}
+                >
                   {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
                 </Button>
-                <Button variant={isVideoEnabled ? "default" : "destructive"} size="lg" onClick={() => toggleVideo(toast)} className="flex-1">
+                <Button 
+                  variant={isVideoEnabled ? "default" : "destructive"} 
+                  size="lg" 
+                  onClick={() => toggleVideo(toast)} 
+                  className="flex-1"
+                  disabled={!mediaCapabilities?.hasCamera}
+                >
                   {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
                 </Button>
               </div>
             </div>
           </div>
         </div>
+
         <div className="text-center mt-8">
           <Button onClick={handleJoinRoom} className="btn-connection px-12 py-4 text-lg">
             Join Conversation

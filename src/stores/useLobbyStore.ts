@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
+import { mediaCapabilityDetector, MediaCapabilities } from '@/lib/mediaCapabilityDetector';
 
 interface ConnectionDetails {
   roomTitle: string;
   nickname: string;
 }
 
-// 변경점: 장치 목록 상태 추가
 interface LobbyState {
   connectionDetails: ConnectionDetails | null;
   isAudioEnabled: boolean;
@@ -17,8 +17,12 @@ interface LobbyState {
   stream: MediaStream | null;
   audioContext: AudioContext | null;
   analyser: AnalyserNode | null;
-  audioDevices: MediaDeviceInfo[]; // 오디오 장치 목록
-  videoDevices: MediaDeviceInfo[]; // 비디오 장치 목록
+  audioDevices: MediaDeviceInfo[];
+  videoDevices: MediaDeviceInfo[];
+  // 새로 추가
+  mediaCapabilities: MediaCapabilities | null;
+  isDummyStream: boolean;
+  streamWarnings: string[];
 }
 
 interface LobbyActions {
@@ -51,8 +55,11 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   stream: null,
   audioContext: null,
   analyser: null,
-  audioDevices: [], // 초기값
-  videoDevices: [], // 초기값
+  audioDevices: [],
+  videoDevices: [],
+  mediaCapabilities: null,
+  isDummyStream: false,
+  streamWarnings: [],
 
   initialize: async (roomTitle, nickname, navigate, toast) => {
     const finalNickname = nickname || generateRandomNickname();
@@ -60,44 +67,85 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     await get().initializeMedia(toast);
   },
 
-  // 변경점: 미디어 초기화 로직에 장치 목록 로딩 및 자동 선택 기능 통합
   initializeMedia: async (toast: any) => {
     try {
-      // 핵심: 먼저 스트림 권한을 얻습니다.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: true
+      // 먼저 디바이스 능력 감지
+      const capabilities = await mediaCapabilityDetector.detectCapabilities();
+      set({ mediaCapabilities: capabilities });
+
+      // 선호 설정 (localStorage에서 가져오기)
+      const preferredAudioDevice = localStorage.getItem("preferredAudioDevice");
+      const preferredVideoDevice = localStorage.getItem("preferredVideoDevice");
+
+      // 제약 조건 생성
+      const constraints: MediaStreamConstraints = {
+        audio: preferredAudioDevice ? 
+          { deviceId: { exact: preferredAudioDevice } } : 
+          true,
+        video: preferredVideoDevice ? 
+          { deviceId: { exact: preferredVideoDevice } } : 
+          { width: { ideal: 1280 }, height: { ideal: 720 } }
+      };
+
+      // 능력에 따른 스트림 생성
+      const result = await mediaCapabilityDetector.getConstrainedStream(constraints, true);
+      
+      set({ 
+        stream: result.stream,
+        isDummyStream: result.isDummy,
+        streamWarnings: result.warnings,
+        audioDevices: result.capabilities.microphones,
+        videoDevices: result.capabilities.cameras
+      });
+
+      // 실제 디바이스가 있는 경우 선택된 디바이스 설정
+      if (result.capabilities.microphones.length > 0 && !get().selectedAudioDevice) {
+        set({ selectedAudioDevice: result.capabilities.microphones[0].deviceId });
+      }
+      if (result.capabilities.cameras.length > 0 && !get().selectedVideoDevice) {
+        set({ selectedVideoDevice: result.capabilities.cameras[0].deviceId });
+      }
+
+      // 오디오 분석 초기화 (마이크가 있는 경우만)
+      if (result.capabilities.hasMicrophone && get().isAudioEnabled) {
+        get().initializeAudioAnalysis(result.stream);
+      }
+
+      // 상태에 따른 메시지
+      if (result.isDummy) {
+        toast.info("No camera or microphone detected. You can still join and receive streams.");
+      } else if (result.warnings.length > 0) {
+        toast.warning(`Limited access: ${result.warnings.join(', ')}`);
+      } else {
+        toast.success("Camera and microphone ready!");
+      }
+      
+    } catch (error) {
+      console.error("Media initialization error:", error);
+      
+      // 완전 실패 시 더미 스트림 생성
+      const dummyResult = await mediaCapabilityDetector.getConstrainedStream(
+        { audio: true, video: true },
+        false
+      );
+      
+      set({ 
+        stream: dummyResult.stream,
+        isDummyStream: true,
+        streamWarnings: ['Failed to access media devices']
       });
       
-      set({ stream });
-
-      // 핵심: 권한을 얻은 후에 장치 목록을 가져옵니다.
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const audioInputs = devices.filter(d => d.kind === 'audioinput' && d.deviceId);
-      const videoInputs = devices.filter(d => d.kind === 'videoinput' && d.deviceId);
-
-      set({ audioDevices: audioInputs, videoDevices: videoInputs });
-
-      // 핵심: 장치 목록이 있으면, 첫 번째 장치를 자동으로 선택하여 빈 문자열 상태를 방지합니다.
-      if (audioInputs.length > 0 && !get().selectedAudioDevice) {
-        set({ selectedAudioDevice: audioInputs[0].deviceId });
-      }
-      if (videoInputs.length > 0 && !get().selectedVideoDevice) {
-        set({ selectedVideoDevice: videoInputs[0].deviceId });
-      }
-      
-      if (get().isAudioEnabled) {
-        get().initializeAudioAnalysis(stream);
-      }
-      
-      toast.success("Camera and microphone ready!");
-    } catch (error) {
-      toast.error("Please allow camera and microphone access");
-      console.error("Media access error:", error);
+      toast.error("Could not access media devices. You can still join in receive-only mode.");
     }
   },
 
   initializeAudioAnalysis: (stream: MediaStream) => {
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      console.log('[Lobby] No audio tracks to analyze');
+      return;
+    }
+
     const audioContext = new AudioContext();
     const analyser = audioContext.createAnalyser();
     const source = audioContext.createMediaStreamSource(stream);
@@ -122,21 +170,32 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   },
 
   toggleAudio: () => {
-    const { isAudioEnabled, stream } = get();
+    const { isAudioEnabled, stream, mediaCapabilities } = get();
+    
+    // 마이크가 없으면 토글 불가
+    if (!mediaCapabilities?.hasMicrophone) {
+      return;
+    }
+    
     const newState = !isAudioEnabled;
     set({ isAudioEnabled: newState });
     stream?.getAudioTracks().forEach(track => { track.enabled = newState; });
   },
 
   toggleVideo: async (toast: any) => {
-    // 로직은 기존과 유사하게 유지
-    const { isVideoEnabled, stream } = get();
+    const { isVideoEnabled, stream, mediaCapabilities } = get();
+    
+    // 카메라가 없으면 토글 불가
+    if (!mediaCapabilities?.hasCamera) {
+      toast.warning("No camera available");
+      return;
+    }
+    
     const newVideoState = !isVideoEnabled;
     set({ isVideoEnabled: newVideoState });
     stream?.getVideoTracks().forEach(track => { track.enabled = newVideoState; });
   },
 
-  // 변경점: 장치 변경 시 localStorage에 저장하는 로직 추가
   setSelectedAudioDevice: (deviceId: string) => {
     set({ selectedAudioDevice: deviceId });
     localStorage.setItem("preferredAudioDevice", deviceId);
@@ -153,6 +212,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     const { stream, audioContext } = get();
     stream?.getTracks().forEach(track => track.stop());
     audioContext?.close();
+    mediaCapabilityDetector.cleanup();
     set({
       connectionDetails: null,
       stream: null,
@@ -161,6 +221,9 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
       audioLevel: 0,
       audioDevices: [],
       videoDevices: [],
+      mediaCapabilities: null,
+      isDummyStream: false,
+      streamWarnings: []
     });
   }
 }));

@@ -11,7 +11,6 @@ interface WebRTCEvents {
   onBufferLow?: (peerId: string) => void;
 }
 
-// DataChannel 설정
 const DATACHANNEL_CONFIG = {
   ordered: true,
   maxRetransmits: 30,
@@ -21,32 +20,30 @@ const DATACHANNEL_CONFIG = {
   id: undefined
 };
 
-// 버퍼 관리 상수 (바이트)
-const BUFFER_HIGH_THRESHOLD = 4 * 1024 * 1024; // 4MB - 버퍼 상한선
-const BUFFER_LOW_THRESHOLD = 512 * 1024;  // 512KB - 버퍼 하한선
-const BUFFER_CHECK_INTERVAL = 50; // 50ms 간격
+const BUFFER_HIGH_THRESHOLD = 4 * 1024 * 1024;
+const BUFFER_LOW_THRESHOLD = 512 * 1024;
+const BUFFER_CHECK_INTERVAL = 50;
 
 export class WebRTCManager {
   private peers: Map<string, PeerInstance> = new Map();
-  private localStream: MediaStream;
+  private localStream: MediaStream | null;
   private events: WebRTCEvents;
   private connectionRetries: Map<string, number> = new Map();
   private readonly MAX_RETRIES = 3;
 
-  constructor(localStream: MediaStream, events: WebRTCEvents) {
+  constructor(localStream: MediaStream | null, events: WebRTCEvents) {
     this.localStream = localStream;
     this.events = events;
   }
 
   public createPeer(peerId: string, initiator: boolean): PeerInstance {
-    // 기존 peer 정리
     if (this.peers.has(peerId)) {
       this.removePeer(peerId);
     }
 
-    const peer = new Peer({
+    // 스트림이 없어도 연결 생성 (receive-only mode)
+    const peerConfig: any = {
       initiator: initiator,
-      stream: this.localStream,
       trickle: true,
       channelConfig: DATACHANNEL_CONFIG,
       config: {
@@ -56,17 +53,29 @@ export class WebRTCManager {
           { urls: 'stun:stun2.l.google.com:19302' }
         ],
         iceCandidatePoolSize: 10
+      },
+      // 항상 미디어를 수신할 준비
+      offerOptions: {
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
       }
-    });
+    };
+
+    // 로컬 스트림이 있는 경우만 추가
+    if (this.localStream && this.localStream.getTracks().length > 0) {
+      peerConfig.stream = this.localStream;
+    }
+
+    const peer = new Peer(peerConfig);
     
     this.setupPeerEvents(peer, peerId);
     this.peers.set(peerId, peer);
     this.connectionRetries.set(peerId, 0);
     
-    // 연결 시 버퍼 설정
     peer.on('connect', () => {
       this.setupDataChannelBuffer(peer, peerId);
       this.connectionRetries.set(peerId, 0);
+      console.log(`[WebRTC] Peer ${peerId} connected (${this.localStream ? 'with' : 'without'} local stream)`);
     });
     
     return peer;
@@ -76,10 +85,7 @@ export class WebRTCManager {
     const channel = (peer as any)._channel;
     if (!channel) return;
 
-    // 버퍼 임계값 설정
     channel.bufferedAmountLowThreshold = BUFFER_LOW_THRESHOLD;
-    
-    // 버퍼 낮음 이벤트
     channel.onbufferedamountlow = () => {
       this.events.onBufferLow?.(peerId);
     };
@@ -103,9 +109,8 @@ export class WebRTCManager {
     }
   
     const startTime = Date.now();
-    const MAX_BUFFER = 256 * 1024; // 256KB 버퍼 제한
+    const MAX_BUFFER = 256 * 1024;
     
-    // 버퍼가 가득 찰 때까지 대기
     while (channel.bufferedAmount > MAX_BUFFER) {
       if (Date.now() - startTime > timeout) {
         console.warn(`[WebRTC] Send timeout for peer ${peerId}, buffer full`);
@@ -116,7 +121,6 @@ export class WebRTCManager {
         return false;
       }
       
-      // 더 긴 대기
       await new Promise(resolve => setTimeout(resolve, 50));
     }
   
@@ -133,7 +137,6 @@ export class WebRTCManager {
     }
   }
 
-  // 특정 피어에게 메시지 전송 (신규 메서드)
   public sendToPeer(peerId: string, message: any): boolean {
     const peer = this.peers.get(peerId);
     if (!peer || !peer.connected || peer.destroyed) {
@@ -206,9 +209,7 @@ export class WebRTCManager {
             return;
           }
 
-          // 대용량 데이터 처리
           if (message instanceof ArrayBuffer && message.byteLength > BUFFER_HIGH_THRESHOLD) {
-            // 비동기 flow control 사용
             this.sendWithFlowControl(peerId, message).then(success => {
               if (!success) {
                 console.warn(`[WebRTC] Flow control send failed for peer ${peerId}`);
@@ -237,6 +238,25 @@ export class WebRTCManager {
           peer.replaceTrack(oldTrack, newTrack, stream);
         } catch (error) {
           console.error(`[WebRTC] Failed to replace track for peer ${peerId}:`, error);
+        }
+      }
+    });
+  }
+
+  public updateLocalStream(newStream: MediaStream | null): void {
+    this.localStream = newStream;
+    
+    // 모든 피어에 새 스트림 적용
+    this.peers.forEach((peer, peerId) => {
+      if (!peer.destroyed) {
+        try {
+          if (newStream) {
+            // 새 스트림 추가
+            (peer as any).addStream?.(newStream);
+          }
+          console.log(`[WebRTC] Updated stream for peer ${peerId}`);
+        } catch (error) {
+          console.error(`[WebRTC] Failed to update stream for peer ${peerId}:`, error);
         }
       }
     });
@@ -290,26 +310,21 @@ export class WebRTCManager {
     peer.on('stream', (stream) => {
       console.log(`[WebRTC] Received stream from peer ${peerId}`);
       
-      // 스트림 타입 확인 (비디오 트랙이 있는지)
       const videoTracks = stream.getVideoTracks();
       const audioTracks = stream.getAudioTracks();
       
       if (videoTracks.length > 0) {
         console.log(`[WebRTC] Stream contains ${videoTracks.length} video track(s)`);
-        // 파일 스트리밍 스트림인 경우
         if (videoTracks[0].label.includes('captureStream')) {
           console.log(`[WebRTC] Detected file streaming from peer ${peerId}`);
-          // 파일 스트리밍 알림 이벤트 발생
-          this.events.onStream(peerId, stream);
-        } else {
-          // 일반 웹캠 스트림
-          this.events.onStream(peerId, stream);
         }
       }
       
       if (audioTracks.length > 0) {
         console.log(`[WebRTC] Stream contains ${audioTracks.length} audio track(s)`);
       }
+      
+      this.events.onStream(peerId, stream);
     });
     peer.on('data', (data) => this.events.onData(peerId, data));
     peer.on('close', () => this.events.onClose(peerId));
@@ -317,18 +332,15 @@ export class WebRTCManager {
   }
 
   private handlePeerError(peerId: string, error: Error): void {
-    // OperationError는 일반적으로 무시
     if (error.name === 'OperationError') {
       console.warn(`[WebRTC] Non-fatal OperationError on peer (${peerId}). Flow control will handle it. Error: ${error.message}`);
       return;
     }
 
-    // 재시도 로직
     const retries = this.connectionRetries.get(peerId) || 0;
     if (retries < this.MAX_RETRIES) {
       console.warn(`[WebRTC] Error on peer ${peerId}, retry ${retries + 1}/${this.MAX_RETRIES}:`, error.message);
       this.connectionRetries.set(peerId, retries + 1);
-      // 재연결 로직은 상위 레이어에서 처리
     } else {
       console.error(`[WebRTC] Unrecoverable fatal error on peer (${peerId}), removing peer:`, error);
       this.events.onError(peerId, error);

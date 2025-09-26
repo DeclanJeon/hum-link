@@ -17,6 +17,7 @@ export interface PeerState {
   isSharingScreen: boolean;
   connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
   transcript?: { text: string; isFinal: boolean; lang: string };
+  audioLevel?: number; // 추가
 }
 
 interface PeerConnectionEvents {
@@ -73,6 +74,9 @@ interface PeerConnectionActions {
   addStreamToAllPeers: (stream: MediaStream) => Promise<void>;
   removeStreamFromAllPeers: (stream: MediaStream) => void;
   replaceStreamTrack: (oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack) => void;
+  
+  // ... 기존 actions ...
+  updatePeerAudioLevel: (userId: string, level: number) => void; // 추가
 }
 
 export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectionActions>((set, get) => ({
@@ -596,5 +600,15 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         }
       }
     }));
-  }
+  },
+
+  updatePeerAudioLevel: (userId, level) => {
+    set(produce(state => {
+      const peer = state.peers.get(userId);
+      if (peer) {
+        peer.audioLevel = level;
+      }
+    }));
+  },
+
 }));

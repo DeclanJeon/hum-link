@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { usePeerConnectionStore } from './usePeerConnectionStore';
 import { useSignalingStore } from './useSignalingStore';
+import { cameraManager, CameraFacing } from '@/lib/cameraStrategy';
+import { toast } from 'sonner';
 
 interface MediaDeviceState {
   localStream: MediaStream | null;
@@ -9,6 +11,10 @@ interface MediaDeviceState {
   isSharingScreen: boolean;
   originalVideoTrack: MediaStreamTrack | null;
   preShareVideoState: boolean | null;
+  // 모바일 카메라 관련 추가
+  isMobile: boolean;
+  cameraFacing: CameraFacing;
+  hasMultipleCameras: boolean;
 }
 
 interface MediaDeviceActions {
@@ -16,6 +22,9 @@ interface MediaDeviceActions {
   toggleAudio: () => void;
   toggleVideo: () => void;
   toggleScreenShare: (toast: any) => Promise<void>;
+  // 모바일 카메라 관련 추가
+  initializeMobileDetection: () => Promise<void>;
+  switchCamera: () => Promise<void>;
   cleanup: () => void;
 }
 
@@ -26,6 +35,9 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
   isSharingScreen: false,
   originalVideoTrack: null,
   preShareVideoState: null,
+  isMobile: false,
+  cameraFacing: 'user',
+  hasMultipleCameras: false,
 
   setLocalStream: (stream) => {
     set({
@@ -33,7 +45,86 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       isAudioEnabled: stream.getAudioTracks()[0]?.enabled ?? false,
       isVideoEnabled: stream.getVideoTracks()[0]?.enabled ?? false,
     });
+    
+    // 스트림 설정 시 모바일 감지도 실행
+    get().initializeMobileDetection();
   },
+
+  initializeMobileDetection: async () => {
+    const isMobile = cameraManager.isMobileDevice();
+    const cameras = await cameraManager.detectCameras();
+    const hasMultipleCameras = cameras.length > 1;
+    
+    set({
+      isMobile,
+      hasMultipleCameras,
+      cameraFacing: cameraManager.getCurrentFacing()
+    });
+    
+    console.log(`[MediaDevice] Mobile: ${isMobile}, Cameras: ${cameras.length}`);
+  },
+
+switchCamera: async () => {
+  const { localStream, isMobile, hasMultipleCameras, isVideoEnabled, isSharingScreen } = get();
+  
+  if (!isMobile || !hasMultipleCameras) {
+    return;
+  }
+  
+  if (isSharingScreen) {
+    toast.warning('Cannot switch camera while screen sharing');
+    return;
+  }
+  
+  if (!localStream) {
+    toast.error('No active stream');
+    return;
+  }
+  
+  try {
+    // 현재 비디오 트랙 상태 저장
+    const currentVideoTrack = localStream.getVideoTracks()[0];
+    const wasEnabled = currentVideoTrack?.enabled || false;
+    
+    // 카메라 전환
+    const newStream = await cameraManager.switchCamera(localStream);
+    
+    if (newStream && newStream !== localStream) {
+      const oldVideoTrack = localStream.getVideoTracks()[0];
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      
+      if (oldVideoTrack && newVideoTrack) {
+        // WebRTC 피어에 트랙 교체
+        const { webRTCManager } = usePeerConnectionStore.getState();
+        if (webRTCManager) {
+          webRTCManager.replaceTrack(oldVideoTrack, newVideoTrack, newStream);
+        }
+        
+        // 로컬 스트림 업데이트
+        localStream.removeTrack(oldVideoTrack);
+        localStream.addTrack(newVideoTrack);
+        oldVideoTrack.stop();
+        
+        // 이전 상태 복원
+        newVideoTrack.enabled = wasEnabled;
+        
+        set({
+          localStream: newStream,
+          cameraFacing: cameraManager.getCurrentFacing()
+        });
+        
+        // 시각적 피드백
+        toast.success(`Camera switched`, {
+          duration: 1000,
+          position: 'top-center'
+        });
+      }
+    }
+  } catch (error) {
+    console.error('[MediaDevice] Camera switch failed:', error);
+    toast.error('Failed to switch camera');
+  }
+},
 
   toggleAudio: () => {
     const enabled = !get().isAudioEnabled;
@@ -54,12 +145,17 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
 
   toggleScreenShare: async (toast: any) => {
     const { isSharingScreen, localStream, originalVideoTrack, isVideoEnabled, preShareVideoState } = get();
-    const { replaceTrack } = usePeerConnectionStore.getState();
+    const { webRTCManager } = usePeerConnectionStore.getState();
+
+    if (!webRTCManager) {
+      toast.error('WebRTC not initialized');
+      return;
+    }
 
     if (isSharingScreen) {
       if (originalVideoTrack && localStream) {
         const screenTrack = localStream.getVideoTracks()[0];
-        replaceTrack(screenTrack, originalVideoTrack, localStream);
+        webRTCManager.replaceTrack(screenTrack, originalVideoTrack, localStream);
         localStream.removeTrack(screenTrack);
         localStream.addTrack(originalVideoTrack);
         screenTrack.stop();
@@ -89,7 +185,7 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
             preShareVideoState: isVideoEnabled
           });
 
-          replaceTrack(currentVideoTrack, screenTrack, localStream);
+          webRTCManager.replaceTrack(currentVideoTrack, screenTrack, localStream);
           localStream.removeTrack(currentVideoTrack);
           localStream.addTrack(screenTrack);
           
@@ -120,6 +216,9 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       isAudioEnabled: true,
       isVideoEnabled: true,
       preShareVideoState: null,
+      isMobile: false,
+      cameraFacing: 'user',
+      hasMultipleCameras: false
     });
   },
 }));
