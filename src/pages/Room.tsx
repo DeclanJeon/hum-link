@@ -11,7 +11,7 @@ import { ControlBar } from '@/components/ControlBar';
 import { ChatPanel } from '@/components/ChatPanel';
 import { WhiteboardPanel } from '@/components/WhiteboardPanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
-import { FileStreamingPanel } from '@/components/FileStreamingPanel';
+import { FileStreamingPanel } from '@/components/FileStreaming/FileStreamingPanel';
 import { VideoLayout } from '@/components/VideoLayout';
 import { toast } from 'sonner';
 import { useIsMobile } from '@/hooks/use-mobile';
