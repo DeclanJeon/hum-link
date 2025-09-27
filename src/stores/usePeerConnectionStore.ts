@@ -314,10 +314,16 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       return;
     }
 
-    if (!isValidFileSize(file.size)) {
-      console.error("[FILE_TRANSFER] File size exceeds limit (50GB).");
-      toast.error("File size exceeds the maximum limit of 50GB.");
-      return;
+    // 크기 제한 체크 제거 또는 옵션으로 변경
+    // if (!isValidFileSize(file.size)) {
+    //   console.error("[FILE_TRANSFER] File size exceeds limit (50GB).");
+    //   toast.error("File size exceeds the maximum limit of 50GB.");
+    //   return;
+    // }
+
+    // 대신 경고만 표시
+    if (file.size > 1024 * 1024 * 1024) { // 1GB 이상
+      toast.warning(`Large file (${(file.size / (1024 * 1024 * 1024)).toFixed(2)}GB). Transfer may take time.`);
     }
 
     const chunkSize = calculateOptimalChunkSize(file.size);

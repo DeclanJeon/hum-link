@@ -1,5 +1,7 @@
+// src/components/FileStreaming/DebugPanel.tsx
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 interface DebugInfo {
   canvasReady: boolean;
@@ -20,27 +22,80 @@ interface DebugPanelProps {
 }
 
 export const DebugPanel = ({ debugInfo }: DebugPanelProps) => {
+  const getStatusIcon = (status: boolean) => {
+    return status ? 
+      <CheckCircle className="w-3 h-3 text-green-500" /> : 
+      <XCircle className="w-3 h-3 text-red-500" />;
+  };
+  
+  const getStatusBadge = (label: string, value: any, type: 'success' | 'error' | 'warning' | 'default' = 'default') => {
+    return (
+      <Badge variant={type === 'success' ? 'default' : type === 'error' ? 'destructive' : 'secondary'} className="text-xs">
+        {label}: {value}
+      </Badge>
+    );
+  };
+  
   return (
     <Alert className="m-4">
       <AlertCircle className="h-4 w-4" />
       <AlertDescription>
-        <div className="space-y-1 text-xs font-mono">
-          <div>Canvas Ready: {debugInfo.canvasReady ? '✅' : '❌'}</div>
-          <div>Stream Created: {debugInfo.streamCreated ? '✅' : '❌'}</div>
-          <div>Stream Active: {debugInfo.streamActive ? '✅' : '❌'}</div>
-          <div>Track Count: {debugInfo.trackCount}</div>
-          <div>Audio Enabled: {debugInfo.audioEnabled ? '✅' : '❌'}</div>
-          <div>Peers Connected: {debugInfo.peersConnected}</div>
-          <div>Video State: {debugInfo.videoState}</div>
-          <div>Current FPS: {debugInfo.fps}</div>
-          <div>Frame Drops: {debugInfo.frameDrops}</div>
-          <div>Video Time: {debugInfo.videoTime.toFixed(2)}s</div>
+        <div className="space-y-3">
+          {/* Stream Status Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              {getStatusIcon(debugInfo.canvasReady)}
+              <span>Canvas Ready</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {getStatusIcon(debugInfo.streamCreated)}
+              <span>Stream Created</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {getStatusIcon(debugInfo.streamActive)}
+              <span>Stream Active</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {getStatusIcon(debugInfo.audioEnabled)}
+              <span>Audio Enabled</span>
+            </div>
+          </div>
+          
+          {/* Metrics */}
+          <div className="flex flex-wrap gap-2">
+            {getStatusBadge('Tracks', debugInfo.trackCount)}
+            {getStatusBadge('Peers', debugInfo.peersConnected, 
+              debugInfo.peersConnected > 0 ? 'success' : 'warning')}
+            {getStatusBadge('FPS', debugInfo.fps, 
+              debugInfo.fps > 20 ? 'success' : debugInfo.fps > 10 ? 'warning' : 'error')}
+            {getStatusBadge('Drops', debugInfo.frameDrops, 
+              debugInfo.frameDrops > 100 ? 'error' : 'default')}
+          </div>
+          
+          {/* Video State */}
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-xs">Video:</span>
+              <Badge variant="outline" className="text-xs">
+                {debugInfo.videoState}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                @ {debugInfo.videoTime.toFixed(2)}s
+              </span>
+            </div>
+          </div>
+          
+          {/* Recent Errors */}
           {debugInfo.errors.length > 0 && (
-            <div className="mt-2">
-              <div className="font-bold">Recent Errors:</div>
-              {debugInfo.errors.map((err, i) => (
-                <div key={i} className="text-red-500">{err}</div>
-              ))}
+            <div className="space-y-1">
+              <div className="font-semibold text-xs text-red-500">Recent Errors:</div>
+              <div className="space-y-0.5">
+                {debugInfo.errors.map((err, i) => (
+                  <div key={i} className="text-xs text-red-500 font-mono bg-red-50 dark:bg-red-950/20 px-2 py-1 rounded">
+                    {err}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

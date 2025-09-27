@@ -27,10 +27,13 @@ export const calculateOptimalChunkSize = (fileSize: number): number => {
 // 파일 크기 제한 (1GB)
 export const isValidFileSize = (
   fileSize: number,
-  maxSize: number = 1024 * 1024 * 1024 * 50
+  maxSize?: number
 ): boolean => {
+  // maxSize가 제공되지 않으면 제한 없음
+  if (!maxSize) return fileSize > 0;
   return fileSize > 0 && fileSize <= maxSize;
 };
+
 
 // 파일 크기 포맷팅
 export const formatFileSize = (bytes: number): string => {

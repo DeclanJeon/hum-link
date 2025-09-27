@@ -1,3 +1,4 @@
+// src/stores/useFileStreamingStore.ts
 import { create } from 'zustand';
 import { produce } from 'immer';
 
@@ -19,6 +20,9 @@ interface FileStreamingState {
   streamStartTime: number | null;
   bytesStreamed: number;
   fps: number;
+  
+  // Stream state tracking
+  originalStreamSnapshot: any | null;
 }
 
 interface FileStreamingActions {
@@ -30,6 +34,7 @@ interface FileStreamingActions {
   setCurrentPage: (page: number) => void;
   setTotalPages: (pages: number) => void;
   updateStreamMetrics: (bytes: number, fps: number) => void;
+  setOriginalStreamSnapshot: (snapshot: any) => void;
   reset: () => void;
 }
 
@@ -44,6 +49,7 @@ export const useFileStreamingStore = create<FileStreamingState & FileStreamingAc
   streamStartTime: null,
   bytesStreamed: 0,
   fps: 0,
+  originalStreamSnapshot: null,
 
   setSelectedFile: (file) => set({ selectedFile: file }),
   
@@ -72,6 +78,8 @@ export const useFileStreamingStore = create<FileStreamingState & FileStreamingAc
     state.fps = fps;
   })),
   
+  setOriginalStreamSnapshot: (snapshot) => set({ originalStreamSnapshot: snapshot }),
+  
   reset: () => set({
     selectedFile: null,
     fileType: 'other',
@@ -83,5 +91,6 @@ export const useFileStreamingStore = create<FileStreamingState & FileStreamingAc
     streamStartTime: null,
     bytesStreamed: 0,
     fps: 0,
+    originalStreamSnapshot: null,
   }),
 }));
