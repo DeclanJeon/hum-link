@@ -1,3 +1,8 @@
+/**
+ * @fileoverview 파일 스트리밍 패널 컴포넌트 수정
+ * @module components/FileStreaming/FileStreamingPanel
+ */
+
 import { useRef, useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';

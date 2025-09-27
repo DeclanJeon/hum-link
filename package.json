@@ -70,7 +70,14 @@
     "translate": "^3.0.1",
     "vaul": "^0.9.9",
     "zod": "^3.25.76",
-    "zustand": "^5.0.8"
+    "zustand": "^5.0.8",
+    "subtitle": "^4.2.1",
+    "libass-wasm": "^4.1.0",
+    "comlink": "^4.4.1",
+    "fuse.js": "^6.6.2",
+    "dompurify": "^3.0.6",
+    "lodash": "^4.17.21"
+
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
@@ -78,6 +85,8 @@
     "@types/node": "^22.16.5",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
+    "@types/dompurify": "^3.0.5",
+    "@types/lodash": "^4.14.202",
     "@vitejs/plugin-react-swc": "^3.11.0",
     "autoprefixer": "^10.4.21",
     "eslint": "^9.32.0",

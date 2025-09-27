@@ -1,3 +1,8 @@
+/**
+ * @fileoverview 파일 스트리밍 Hook 수정
+ * @module hooks/useFileStreaming
+ */
+
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
 import { StreamStateManager } from '@/services/streamStateManager';
@@ -158,6 +163,9 @@ export const useFileStreaming = ({
     return stream;
   };
 
+  /**
+   * 파일 선택 처리
+   */
   const handleFileSelect = async (
     file: File,
     setSelectedFile: (file: File) => void,
@@ -175,6 +183,13 @@ export const useFileStreaming = ({
       
       if (file.type.startsWith('video/')) {
         setFileType('video');
+        
+        // videoRef가 준비될 때까지 대기
+        if (!videoRef?.current) {
+          console.log('[FileStreaming] Waiting for video element to be ready...');
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
         await loadVideoWithRecovery(file);
       } else if (file.type === 'application/pdf') {
         setFileType('pdf');
@@ -205,9 +220,15 @@ export const useFileStreaming = ({
     }
   };
 
+  /**
+   * 비디오 파일 로드 (복구 로직 포함)
+   * @param file - 비디오 파일
+   */
   const loadVideoWithRecovery = async (file: File) => {
-    if (!videoRef.current) {
-      logError('Video element not found');
+    // videoRef 체크 개선
+    if (!videoRef?.current) {
+      logError('Video element not found - videoRef is null or undefined');
+      toast.error('Video player not initialized');
       return;
     }
     
@@ -216,12 +237,46 @@ export const useFileStreaming = ({
       throw new Error(validation.error);
     }
     
-    videoLoadedRef.current = true;
-    
-    updateDebugInfo({ 
-      videoState: 'ready',
-      videoTime: 0
-    });
+    try {
+      // 비디오 소스 설정
+      const url = URL.createObjectURL(file);
+      currentObjectUrlRef.current = url;
+      
+      const video = videoRef.current;
+      video.src = url;
+      
+      // 비디오 로드 대기
+      await new Promise((resolve, reject) => {
+        const handleLoadedData = () => {
+          video.removeEventListener('loadeddata', handleLoadedData);
+          video.removeEventListener('error', handleError);
+          resolve(true);
+        };
+        
+        const handleError = () => {
+          video.removeEventListener('loadeddata', handleLoadedData);
+          video.removeEventListener('error', handleError);
+          reject(new Error('Failed to load video'));
+        };
+        
+        video.addEventListener('loadeddata', handleLoadedData);
+        video.addEventListener('error', handleError);
+        video.load();
+      });
+      
+      videoLoadedRef.current = true;
+      
+      updateDebugInfo({
+        videoState: 'ready',
+        videoTime: 0,
+        canvasReady: true
+      });
+      
+      console.log('[FileStreaming] Video loaded successfully');
+    } catch (error) {
+      logError(`Failed to load video: ${error}`);
+      throw error;
+    }
   };
   
   const loadPDF = async (file: File) => {

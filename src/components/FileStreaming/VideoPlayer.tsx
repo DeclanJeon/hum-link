@@ -1,8 +1,17 @@
+/**
+ * @fileoverview 비디오 플레이어 컴포넌트 초기화 개선
+ * @module components/FileStreaming/VideoPlayer
+ */
+
 import { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Eye, EyeOff, RotateCw } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { SubtitlePanel } from './SubtitlePanel';
+import { SubtitleDisplay } from './SubtitleDisplay';
+import { useSubtitleSync } from '@/hooks/useSubtitleSync';
+import { toast } from 'sonner';
 
 interface VideoPlayerProps {
   videoRef: React.RefObject<HTMLVideoElement>;
@@ -30,16 +39,32 @@ export const VideoPlayer = ({
   const [isReady, setIsReady] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const frameUpdateInterval = useRef<NodeJS.Timeout | null>(null);
   const objectUrlRef = useRef<string | null>(null);
 
-  // 파일이 변경될 때 비디오 로드
+  // 전체화면 감지
+  useEffect(() => {
+    const handleFullscreenChange = (): void => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // 자막 동기화 Hook 사용
+  useSubtitleSync(videoRef, isStreaming);
+
+  // 비디오 파일 로드 처리
   useEffect(() => {
     if (!videoRef.current || !file) return;
 
     const loadVideo = async () => {
       try {
-        // 이전 URL 정리
+        // 기존 URL 정리
         if (objectUrlRef.current) {
           URL.revokeObjectURL(objectUrlRef.current);
         }
@@ -49,6 +74,13 @@ export const VideoPlayer = ({
         objectUrlRef.current = url;
         
         const video = videoRef.current!;
+        
+        // 비디오 소스 설정 전 초기화
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        
+        // 새 소스 설정
         video.src = url;
         video.load();
         
@@ -56,6 +88,7 @@ export const VideoPlayer = ({
       } catch (error) {
         console.error('[VideoPlayer] Failed to load video:', error);
         onStateChange({ videoState: `error: ${error}` });
+        toast.error('Failed to load video file');
       }
     };
 
@@ -258,7 +291,38 @@ export const VideoPlayer = ({
     : 0;
   
   return (
-    <div className="space-y-3 p-4 bg-secondary/50 rounded-lg">
+    <div className="video-player-container space-y-3">
+      {/* 비디오 컨테이너 */}
+      <div className="relative bg-black rounded-lg overflow-hidden">
+        {showPreview && (
+          <video
+            ref={videoRef}
+            className="w-full h-auto max-h-[500px]"
+            controls={false}
+            playsInline
+            muted={localVideoState.isMuted}
+          />
+        )}
+        
+        {/* 자막 오버레이 */}
+        <SubtitleDisplay
+          videoRef={videoRef}
+          isFullscreen={isFullscreen}
+        />
+        
+        {isBuffering && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+          </div>
+        )}
+      </div>
+      
+      {/* 자막 컨트롤 패널 */}
+      <SubtitlePanel
+        videoRef={videoRef}
+        isStreaming={isStreaming}
+      />
+      
       <div className="flex justify-between items-center mb-2">
         <div className="flex items-center gap-3">
           <Button
@@ -302,28 +366,10 @@ export const VideoPlayer = ({
         </div>
       </div>
       
-      <div className={showPreview ? 'block' : 'hidden'}>
-        <div className="bg-black rounded-lg overflow-hidden relative">
-          <video
-            ref={videoRef}
-            className="w-full h-auto max-h-[300px]"
-            controls={false}
-            playsInline
-            muted={localVideoState.isMuted}
-          />
-          
-          {isBuffering && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
-            </div>
-          )}
-        </div>
-      </div>
-      
       {isStreaming && (
         <Alert>
           <AlertDescription className="text-xs">
-            Video is being streamed to {videoRef.current?.paused ? '0' : 'active'} peers. 
+            Video is being streamed to {videoRef.current?.paused ? '0' : 'active'} peers.
             Playback controls affect all viewers.
           </AlertDescription>
         </Alert>
