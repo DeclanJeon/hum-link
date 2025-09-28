@@ -35,7 +35,12 @@ type TransferStatus = 'preparing' | 'transferring' | 'verifying' | 'complete' | 
 
 export const FileMessage = ({ message }: FileMessageProps) => {
   const { fileTransfers } = useChatStore();
-  const { activeTransfers, pauseFileTransfer, resumeFileTransfer, cancelFileTransfer } = usePeerConnectionStore();
+  
+  // Selector를 사용하여 필요한 부분만 구독
+  const activeTransfers = usePeerConnectionStore(state => state.activeTransfers);
+  const pauseFileTransfer = usePeerConnectionStore(state => state.pauseFileTransfer);
+  const resumeFileTransfer = usePeerConnectionStore(state => state.resumeFileTransfer);
+  const cancelFileTransfer = usePeerConnectionStore(state => state.cancelFileTransfer);
   
   // 현재 전송 상태 가져오기
   const activeTransfer = activeTransfers.get(message.id);
@@ -52,19 +57,19 @@ export const FileMessage = ({ message }: FileMessageProps) => {
   const [eta, setEta] = useState<number | null>(null);
   const [transferredSize, setTransferredSize] = useState(0);
   
-  // 🔥 핵심 수정: 통합된 진행률 계산 로직
+  // 상태 업데이트 로직
   useEffect(() => {
     if (!message.fileMeta || !transferInfo) return;
     
     if (isLocalFile && activeTransfer) {
-      // === 송신자 로직 ===
+      // === 송신 측 로직 ===
       const metrics = activeTransfer.metrics;
       
-      // 실시간 진행률 반영
+      // 실제 진행률 계산
       const actualProgress = metrics.progress || 0;
       const sentProgress = metrics.sendProgress || 0;
       
-      // 즉시 UI 업데이트
+      // UI 업데이트
       setPrimaryProgress(actualProgress * 100);
       setSecondaryProgress(sentProgress * 100);
       
@@ -81,7 +86,7 @@ export const FileMessage = ({ message }: FileMessageProps) => {
         setStatus('preparing');
       }
       
-      // 속도 및 ETA
+      // 속도 및 ETA 계산
       setSpeed(metrics.speed || 0);
       setTransferredSize(actualProgress * message.fileMeta.size);
       
@@ -93,7 +98,7 @@ export const FileMessage = ({ message }: FileMessageProps) => {
       }
       
     } else if (!isLocalFile && transferInfo) {
-      // === 수신자 로직 ===
+      // === 수신 측 로직 ===
       const receivedProgress = transferInfo.progress * 100;
       
       setPrimaryProgress(receivedProgress);
@@ -128,14 +133,13 @@ export const FileMessage = ({ message }: FileMessageProps) => {
       setSecondaryProgress(100);
     }
     
-    // 메트릭이 변경될 때마다 리렌더링
   }, [
     message,
     transferInfo,
     activeTransfer?.metrics,
     activeTransfer?.metrics?.progress,
     activeTransfer?.metrics?.sendProgress,
-    activeTransfer?.metrics?.lastUpdateTime, // 추가
+    activeTransfer?.metrics?.lastUpdateTime,
     activeTransfer?.isPaused,
     isLocalFile
   ]);
@@ -210,7 +214,7 @@ export const FileMessage = ({ message }: FileMessageProps) => {
             </div>
           </div>
           
-          {/* 컨트롤 버튼들 */}
+          {/* 컨트롤 버튼 */}
           {isLocalFile && !isComplete && (
             <div className="flex gap-1">
               {activeTransfer && (
@@ -240,17 +244,15 @@ export const FileMessage = ({ message }: FileMessageProps) => {
         {/* 진행 상태 */}
         {!isComplete && (
           <div className="space-y-3">
-            {/* 진행률 바 */}
+            {/* 프로그레스 바 */}
             {isLocalFile && secondaryProgress > primaryProgress + 5 ? (
-              // 송신자: 이중 프로그레스바
+              // 송신측: 이중 프로그레스
               <div className="space-y-1">
                 <div className="relative">
-                  {/* 전송된 진행률 (연한색) */}
                   <Progress 
                     value={secondaryProgress} 
                     className="h-2 opacity-30"
                   />
-                  {/* 확인된 진행률 (진한색) */}
                   <Progress 
                     value={primaryProgress} 
                     className="h-2 absolute inset-0"
@@ -262,7 +264,7 @@ export const FileMessage = ({ message }: FileMessageProps) => {
                 </div>
               </div>
             ) : (
-              // 수신자 또는 단일 프로그레스바
+              // 일반 프로그레스
               <div className="space-y-1">
                 <Progress value={primaryProgress} className="h-2" />
                 <div className="flex justify-between text-xs text-muted-foreground">
@@ -272,7 +274,7 @@ export const FileMessage = ({ message }: FileMessageProps) => {
               </div>
             )}
             
-            {/* 전송 메트릭스 */}
+            {/* 전송 통계 */}
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-3 text-muted-foreground">
                 {speed > 0 && (
@@ -286,7 +288,7 @@ export const FileMessage = ({ message }: FileMessageProps) => {
                 )}
               </div>
               
-              {/* 청크 정보 (송신자만) */}
+              {/* 청크 정보 (송신측) */}
               {isLocalFile && activeTransfer?.metrics && (
                 <div className="text-muted-foreground/70">
                   {activeTransfer.metrics.chunksAcked}/{activeTransfer.metrics.totalChunks} chunks
@@ -294,7 +296,7 @@ export const FileMessage = ({ message }: FileMessageProps) => {
               )}
             </div>
 
-            {/* 상태별 메시지 */}
+            {/* 상태 메시지 */}
             {status === 'verifying' && (
               <div className="text-xs text-purple-500 animate-pulse text-center">
                 Waiting for confirmation...

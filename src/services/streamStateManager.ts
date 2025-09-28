@@ -7,7 +7,7 @@ export interface StreamSnapshot {
   audioMuted: boolean;
   videoEnabled: boolean;
   audioEnabled: boolean;
-  streamType: 'camera' | 'screen' | 'none';
+  streamType: 'camera' | 'screen' | 'file' | 'none';
   deviceIds: {
     videoId?: string;
     audioId?: string;
@@ -20,13 +20,19 @@ export interface StreamSnapshot {
     label: string;
     settings: MediaTrackSettings;
   }>;
+  // 스토어 상태 추가
+  storeState?: {
+    isAudioEnabled: boolean;
+    isVideoEnabled: boolean;
+    isSharingScreen: boolean;
+  };
 }
 
 export class StreamStateManager {
   private snapshot: StreamSnapshot | null = null;
   private originalStream: MediaStream | null = null;
   
-  captureState(stream: MediaStream | null): void {
+  captureState(stream: MediaStream | null, storeState?: any): void {
     console.log('[StreamStateManager] Capturing stream state');
     
     if (!stream) {
@@ -39,7 +45,8 @@ export class StreamStateManager {
         audioEnabled: false,
         streamType: 'none',
         deviceIds: {},
-        tracks: []
+        tracks: [],
+        storeState: storeState || null
       };
       this.originalStream = null;
       return;
@@ -50,13 +57,15 @@ export class StreamStateManager {
     const videoTracks = stream.getVideoTracks();
     const audioTracks = stream.getAudioTracks();
     
-    let streamType: 'camera' | 'screen' | 'none' = 'none';
+    let streamType: 'camera' | 'screen' | 'file' | 'none' = 'none';
     if (videoTracks.length > 0) {
       const videoTrack = videoTracks[0];
       if (videoTrack.label.toLowerCase().includes('screen') || 
           videoTrack.label.toLowerCase().includes('window') ||
           videoTrack.label.toLowerCase().includes('tab')) {
         streamType = 'screen';
+      } else if (videoTrack.label.toLowerCase().includes('capturestream')) {
+        streamType = 'file';
       } else {
         streamType = 'camera';
       }
@@ -80,7 +89,8 @@ export class StreamStateManager {
         muted: track.muted,
         label: track.label,
         settings: track.getSettings()
-      }))
+      })),
+      storeState: storeState || null
     };
     
     console.log('[StreamStateManager] State captured:', this.snapshot);
@@ -102,6 +112,7 @@ export class StreamStateManager {
     if (this.originalStream && this.originalStream.active) {
       console.log('[StreamStateManager] Returning original active stream');
       
+      // 트랙 상태 복원
       this.originalStream.getTracks().forEach((track, index) => {
         const originalState = this.snapshot!.tracks[index];
         if (originalState) {
@@ -115,6 +126,11 @@ export class StreamStateManager {
     if (this.snapshot.streamType === 'screen') {
       console.log('[StreamStateManager] Cannot restore screen share automatically');
       toast.info('Screen sharing was stopped. Please share your screen again if needed.');
+      return null;
+    }
+    
+    if (this.snapshot.streamType === 'file') {
+      console.log('[StreamStateManager] File stream detected, skipping restoration');
       return null;
     }
     
@@ -132,6 +148,7 @@ export class StreamStateManager {
       
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       
+      // 트랙 상태 복원
       newStream.getVideoTracks().forEach(track => {
         track.enabled = this.snapshot!.videoEnabled;
       });
@@ -150,10 +167,18 @@ export class StreamStateManager {
     }
   }
   
+  getStoreState(): any {
+    return this.snapshot?.storeState || null;
+  }
+  
   isDummyStream(): boolean {
     return this.snapshot?.streamType === 'none' || 
            (this.snapshot?.tracks.length === 0) ||
            false;
+  }
+  
+  isFileStream(): boolean {
+    return this.snapshot?.streamType === 'file';
   }
   
   restoreTrackStates(stream: MediaStream): void {

@@ -1,10 +1,10 @@
 /**
- * @fileoverview 통합 VideoPreview 컴포넌트 - 로컬/원격 모두 지원
+ * @fileoverview 비디오 프리뷰 컴포넌트 - 로컬/원격 비디오 표시
  * @module components/VideoPreview
  */
 
 import { useEffect, useRef } from "react";
-import { VoiceVisualizer } from "./VoiceVisualizer";
+// import { VoiceVisualizer } from "./VoiceVisualizer";
 import { SubtitleDisplay } from "./FileStreaming/SubtitleDisplay";
 import { useVideoFullscreen } from "@/hooks/useVideoFullscreen";
 import { useSubtitleStore } from "@/stores/useSubtitleStore";
@@ -18,12 +18,12 @@ interface VideoPreviewProps {
   audioLevel?: number;
   showVoiceFrame?: boolean;
   isLocalVideo?: boolean;
-  showSubtitles?: boolean; // 자막 표시 여부 (원격 비디오용)
+  showSubtitles?: boolean;
 }
 
 /**
- * 통합 비디오 프리뷰 컴포넌트
- * 로컬 및 원격 스트림 모두 지원
+ * 비디오 프리뷰 컴포넌트
+ * 로컬 또는 원격 비디오 스트림을 표시
  */
 export const VideoPreview = ({
   stream,
@@ -37,10 +37,10 @@ export const VideoPreview = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // 전체화면 Hook
+  // 풀스크린 Hook
   const { isFullscreen, handleDoubleClick } = useVideoFullscreen(containerRef, videoRef);
   
-  // 자막 상태 (원격 비디오에서만 사용)
+  // 자막 상태 (파일 스트리밍용)
   const { isEnabled: subtitlesEnabled } = useSubtitleStore();
   const shouldShowSubtitles = showSubtitles && subtitlesEnabled && !isLocalVideo;
 
@@ -58,14 +58,14 @@ export const VideoPreview = ({
         isFullscreen && "fixed inset-0 z-50 rounded-none bg-black"
       )}
       onDoubleClick={handleDoubleClick}
-      tabIndex={0} // 키보드 포커스 가능
+      tabIndex={0}
     >
       {/* 비디오 엘리먼트 */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        muted={isLocalVideo} // 로컬 비디오만 음소거
+        muted={isLocalVideo}
         className={cn(
           "transition-opacity duration-300",
           isFullscreen ? "w-full h-full object-contain" : "w-full h-full object-cover",
@@ -84,7 +84,7 @@ export const VideoPreview = ({
         </div>
       )}
       
-      {/* 자막 오버레이 (원격 비디오용) */}
+      {/* 자막 표시 (파일 스트리밍) */}
       {shouldShowSubtitles && (
         <SubtitleDisplay
           videoRef={videoRef}
@@ -92,16 +92,16 @@ export const VideoPreview = ({
         />
       )}
       
-      {/* 음성 시각화 */}
-      {showVoiceFrame && !isFullscreen && (
+      {/* 음성 프레임 비주얼라이저 - 주석 처리 */}
+      {/* {showVoiceFrame && !isFullscreen && (
         <VoiceVisualizer
           audioLevel={audioLevel}
           isActive={true}
           position="frame"
         />
-      )}
+      )} */}
 
-      {/* 닉네임 오버레이 */}
+      {/* 닉네임 표시 */}
       <div className={cn(
         "absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-full text-xs text-white",
         isFullscreen && "bottom-4 left-4 text-sm px-4 py-2"
@@ -109,7 +109,7 @@ export const VideoPreview = ({
         {nickname} {isLocalVideo && "(You)"}
       </div>
       
-      {/* 전체화면 힌트 (호버 시) */}
+      {/* 풀스크린 힌트 (데스크톱) */}
       {!isFullscreen && (
         <>
           <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -119,12 +119,12 @@ export const VideoPreview = ({
           </div>
           
           <div className="absolute bottom-2 right-2 text-xs text-white/50 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 px-2 py-1 rounded">
-            Double-click • Press F
+            Double-click or Press F
           </div>
         </>
       )}
       
-      {/* 전체화면 시 ESC 안내 */}
+      {/* 풀스크린 종료 안내 */}
       {isFullscreen && (
         <div className="absolute top-4 right-4 text-sm text-white/70 bg-black/60 px-3 py-2 rounded">
           Press ESC to exit fullscreen

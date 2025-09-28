@@ -11,20 +11,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { nanoid } from 'nanoid';
 import { cn } from "@/lib/utils";
 
-// 음성 레벨 인디케이터 컴포넌트
+// 오디오 레벨 인디케이터 - 임시 비활성화
 const AudioLevelIndicator = ({ audioLevel, isEnabled }: { audioLevel: number; isEnabled: boolean }) => {
-  const getBarColor = (threshold: number) => {
-    if (!isEnabled) return 'bg-muted';
-    if (audioLevel > threshold) {
-      if (audioLevel > 0.7) return 'bg-red-500';
-      if (audioLevel > 0.5) return 'bg-yellow-500';
-      return 'bg-green-500';
-    }
-    return 'bg-muted/50';
-  };
-
-  const bars = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
-
   return (
     <div className="flex items-center gap-2">
       <div className="flex items-center gap-1">
@@ -34,28 +22,11 @@ const AudioLevelIndicator = ({ audioLevel, isEnabled }: { audioLevel: number; is
           <MicOff className="w-4 h-4 text-muted-foreground" />
         )}
       </div>
-      <div className="flex items-end gap-0.5 h-8">
-        {bars.map((threshold, index) => (
-          <div
-            key={index}
-            className={cn(
-              "w-1 transition-all duration-100 rounded-full",
-              getBarColor(threshold)
-            )}
-            style={{ 
-              height: `${(index + 1) * 12.5}%`,
-              opacity: audioLevel > threshold ? 1 : 0.3
-            }}
-          />
-        ))}
-      </div>
-      <div className="text-xs text-muted-foreground min-w-[60px]">
+      <div className="text-xs text-muted-foreground">
         {!isEnabled ? (
           <span className="text-red-500">Muted</span>
-        ) : audioLevel > 0.1 ? (
-          <span className="text-green-500">Active</span>
         ) : (
-          <span>Silent</span>
+          <span className="text-green-500">Ready</span>
         )}
       </div>
     </div>
@@ -69,7 +40,7 @@ const Lobby = () => {
   const isMobile = useIsMobile();
 
   const {
-    connectionDetails, isAudioEnabled, isVideoEnabled, audioLevel,
+    connectionDetails, isAudioEnabled, isVideoEnabled,
     selectedAudioDevice, selectedVideoDevice, audioDevices, videoDevices, stream,
     initialize, toggleAudio, toggleVideo, setSelectedAudioDevice, setSelectedVideoDevice, cleanup,
     mediaCapabilities
@@ -142,7 +113,7 @@ const Lobby = () => {
     );
   }
 
-  // 모바일 레이아웃
+  // 모바일 뷰
   if (isMobile) {
     return (
       <div className="min-h-screen bg-background overflow-y-auto">
@@ -168,20 +139,20 @@ const Lobby = () => {
             />
           </div>
 
-          {/* 음성 체크 카드 */}
+          {/* 오디오 체크 - 간소화 */}
           <div className="bg-card/50 backdrop-blur-sm rounded-lg p-4 mb-4 border border-border/50">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-medium">Audio Check</h3>
               {mediaCapabilities?.hasMicrophone ? (
-                audioLevel > 0.1 && isAudioEnabled ? (
+                isAudioEnabled ? (
                   <div className="flex items-center gap-1 text-green-500">
                     <CheckCircle className="w-4 h-4" />
-                    <span className="text-xs">Working</span>
+                    <span className="text-xs">Ready</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-1 text-yellow-500">
                     <AlertCircle className="w-4 h-4" />
-                    <span className="text-xs">{isAudioEnabled ? "No sound" : "Muted"}</span>
+                    <span className="text-xs">Muted</span>
                   </div>
                 )
               ) : (
@@ -191,7 +162,7 @@ const Lobby = () => {
                 </div>
               )}
             </div>
-            <AudioLevelIndicator audioLevel={audioLevel} isEnabled={isAudioEnabled} />
+            <AudioLevelIndicator audioLevel={0} isEnabled={isAudioEnabled} />
           </div>
 
           {/* 컨트롤 버튼 */}
@@ -243,7 +214,7 @@ const Lobby = () => {
     );
   }
 
-  // 데스크톱 레이아웃
+  // 데스크톱 뷰
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
       <div className="max-w-5xl w-full">
@@ -266,18 +237,18 @@ const Lobby = () => {
           </div>
 
           <div className="space-y-6">
-            {/* 음성 체크 */}
+            {/* 오디오 체크 - 간소화 */}
             <div className="control-panel">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-medium text-foreground">Audio Check</h3>
-                {mediaCapabilities?.hasMicrophone && audioLevel > 0.1 && isAudioEnabled && (
+                {mediaCapabilities?.hasMicrophone && isAudioEnabled && (
                   <div className="flex items-center gap-1 text-green-500 text-sm">
                     <CheckCircle className="w-4 h-4" />
-                    <span>Clear</span>
+                    <span>Ready</span>
                   </div>
                 )}
               </div>
-              <AudioLevelIndicator audioLevel={audioLevel} isEnabled={isAudioEnabled} />
+              <AudioLevelIndicator audioLevel={0} isEnabled={isAudioEnabled} />
               {!mediaCapabilities?.hasMicrophone && (
                 <p className="text-xs text-yellow-500 mt-2">No microphone detected</p>
               )}

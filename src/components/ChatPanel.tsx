@@ -16,7 +16,11 @@ interface ChatPanelProps {
 
 export const ChatPanel = ({ isOpen, onClose }: ChatPanelProps) => {
   const { chatMessages, isTyping, addMessage } = useChatStore();
-  const { sendToAllPeers, sendFile } = usePeerConnectionStore();
+  
+  // Selector를 사용하여 필요한 함수만 구독
+  const sendToAllPeers = usePeerConnectionStore(state => state.sendToAllPeers);
+  const sendFile = usePeerConnectionStore(state => state.sendFile);
+  
   const { getSessionInfo } = useSessionStore();
   
   const sessionInfo = getSessionInfo();

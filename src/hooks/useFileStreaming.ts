@@ -1,5 +1,5 @@
 /**
- * @fileoverview 파일 스트리밍 Hook 
+ * @fileoverview 파일 스트리밍 Hook - 원격 스트림 복원 수정
  * @module hooks/useFileStreaming
  */
 
@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { StreamStateManager } from '@/services/streamStateManager';
 import { VideoLoader } from '@/services/videoLoader';
 import { RecoveryManager } from '@/services/recoveryManager';
+import { useMediaDeviceStore } from '@/stores/useMediaDeviceStore';
 
 interface UseFileStreamingProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -60,13 +61,15 @@ export const useFileStreaming = ({
   const videoLoadedRef = useRef<boolean>(false);
   const frameCountRef = useRef<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
+  const animationFrameRef = useRef<number | null>(null);
+  
+  // 원본 트랙 저장용 Ref 추가
   const originalTracksRef = useRef<OriginalTrackState>({
     video: null,
     audio: null,
     videoEnabled: false,
     audioEnabled: false
   });
-  const animationFrameRef = useRef<number | null>(null);
   
   // Managers
   const streamStateManager = useRef(new StreamStateManager());
@@ -74,6 +77,13 @@ export const useFileStreaming = ({
   const recoveryManager = useRef(new RecoveryManager());
   
   const recoveryAttemptRef = useRef<boolean>(false);
+  
+  // MediaDeviceStore 접근
+  const { 
+    saveOriginalMediaState, 
+    restoreOriginalMediaState, 
+    setFileStreaming 
+  } = useMediaDeviceStore();
   
   // State
   const [videoState, setVideoState] = useState({
@@ -366,8 +376,12 @@ export const useFileStreaming = ({
     }
     
     try {
-      streamStateManager.current.captureState(localStream);
+      console.log('[FileStreaming] Starting streaming...');
       
+      // 1. 현재 미디어 상태 저장
+      saveOriginalMediaState();
+      
+      // 2. 현재 트랙 저장 (중요!)
       if (localStream) {
         const videoTrack = localStream.getVideoTracks()[0];
         const audioTrack = localStream.getAudioTracks()[0];
@@ -379,11 +393,26 @@ export const useFileStreaming = ({
           audioEnabled: audioTrack?.enabled || false
         };
         
-        console.log('[FileStreaming] Saved original track states:', {
-          videoEnabled: originalTracksRef.current.videoEnabled,
-          audioEnabled: originalTracksRef.current.audioEnabled
+        console.log('[FileStreaming] Saved original tracks:', {
+          hasVideo: !!videoTrack,
+          hasAudio: !!audioTrack,
+          videoEnabled: videoTrack?.enabled,
+          audioEnabled: audioTrack?.enabled
         });
       }
+      
+      // 3. StreamStateManager로도 백업
+      const mediaDeviceState = useMediaDeviceStore.getState();
+      streamStateManager.current.captureState(localStream, {
+        isAudioEnabled: mediaDeviceState.isAudioEnabled,
+        isVideoEnabled: mediaDeviceState.isVideoEnabled,
+        isSharingScreen: mediaDeviceState.isSharingScreen
+      });
+      
+      // 4. 파일 스트리밍 상태 설정
+      setFileStreaming(true);
+      
+      console.log('[FileStreaming] Original state saved, preparing stream...');
       
       let captureStream: MediaStream | null = null;
       
@@ -498,7 +527,8 @@ export const useFileStreaming = ({
       console.log(`[FileStreaming] Stream has ${tracks.length} tracks:`,
         tracks.map(t => `${t.kind}:${t.readyState}`).join(', '));
       
-      await replaceStreamTracksWithForceEnable(captureStream);
+      // WebRTC 트랙 교체
+      await replaceStreamTracksForFileStreaming(captureStream);
       
       setIsStreaming(true);
       toast.success('Started file streaming');
@@ -506,6 +536,10 @@ export const useFileStreaming = ({
     } catch (error) {
       logError(`Failed to start streaming: ${error}`);
       toast.error(`Streaming failed: ${error}`);
+      
+      // 실패 시 원래 상태로 복원
+      await restoreOriginalMediaState();
+      setFileStreaming(false);
       
       if (!recoveryAttemptRef.current) {
         recoveryAttemptRef.current = true;
@@ -523,9 +557,10 @@ export const useFileStreaming = ({
         }
       }
     }
-  }, [fileType, streamQuality, webRTCManager, localStream, peers, setIsStreaming, updateDebugInfo, setVideoState, createCanvasStreamFromVideo]);
+  }, [fileType, streamQuality, webRTCManager, localStream, peers, setIsStreaming, updateDebugInfo, setVideoState, createCanvasStreamFromVideo, saveOriginalMediaState, restoreOriginalMediaState, setFileStreaming]);
 
-  const replaceStreamTracksWithForceEnable = async (newStream: MediaStream) => {
+  // 파일 스트리밍용 트랙 교체 함수
+  const replaceStreamTracksForFileStreaming = async (newStream: MediaStream) => {
     if (!localStream || !webRTCManager) return;
     
     const newVideoTrack = newStream.getVideoTracks()[0];
@@ -535,32 +570,106 @@ export const useFileStreaming = ({
       const originalVideoTrack = localStream.getVideoTracks()[0];
       
       if (originalVideoTrack) {
+        // WebRTC에서 트랙 교체
         webRTCManager.replaceTrack(originalVideoTrack, newVideoTrack, localStream);
+        // 로컬 스트림에서도 교체
         localStream.removeTrack(originalVideoTrack);
         localStream.addTrack(newVideoTrack);
+        // 원본 트랙은 stop하지 않음 (나중에 복원해야 함)
       } else {
         localStream.addTrack(newVideoTrack);
         webRTCManager.addTrackToAllPeers(newVideoTrack, localStream);
       }
       
       newVideoTrack.enabled = true;
-      console.log('[FileStreaming] File streaming video track enabled');
+      console.log('[FileStreaming] File streaming video track replaced and enabled');
     }
     
     if (newAudioTrack) {
       const originalAudioTrack = localStream.getAudioTracks()[0];
       
       if (originalAudioTrack) {
+        // WebRTC에서 트랙 교체
         webRTCManager.replaceTrack(originalAudioTrack, newAudioTrack, localStream);
+        // 로컬 스트림에서도 교체
         localStream.removeTrack(originalAudioTrack);
         localStream.addTrack(newAudioTrack);
+        // 원본 트랙은 stop하지 않음
       } else {
         localStream.addTrack(newAudioTrack);
         webRTCManager.addTrackToAllPeers(newAudioTrack, localStream);
       }
       
       newAudioTrack.enabled = true;
-      console.log('[FileStreaming] File streaming audio track enabled');
+      console.log('[FileStreaming] File streaming audio track replaced and enabled');
+    }
+  };
+
+  // 원래 카메라 트랙으로 복원하는 함수
+  const restoreOriginalTracks = async () => {
+    if (!localStream || !webRTCManager) {
+      console.error('[FileStreaming] Cannot restore tracks: no stream or WebRTC manager');
+      return false;
+    }
+    
+    const originalState = originalTracksRef.current;
+    
+    if (!originalState.video && !originalState.audio) {
+      console.warn('[FileStreaming] No original tracks to restore');
+      return false;
+    }
+    
+    console.log('[FileStreaming] Restoring original tracks...');
+    
+    try {
+      // 현재 파일 스트림 트랙 가져오기
+      const currentVideoTrack = localStream.getVideoTracks()[0];
+      const currentAudioTrack = localStream.getAudioTracks()[0];
+      
+      // 비디오 트랙 복원
+      if (originalState.video && currentVideoTrack) {
+        console.log('[FileStreaming] Replacing file video track with original camera track');
+        
+        // WebRTC 피어 연결에서 트랙 교체
+        webRTCManager.replaceTrack(currentVideoTrack, originalState.video, localStream);
+        
+        // 로컬 스트림에서 트랙 교체
+        localStream.removeTrack(currentVideoTrack);
+        localStream.addTrack(originalState.video);
+        
+        // 원래 enabled 상태 복원
+        originalState.video.enabled = originalState.videoEnabled;
+        
+        // 파일 스트림 트랙 정지
+        currentVideoTrack.stop();
+        
+        console.log(`[FileStreaming] Video track restored, enabled: ${originalState.videoEnabled}`);
+      }
+      
+      // 오디오 트랙 복원
+      if (originalState.audio && currentAudioTrack) {
+        console.log('[FileStreaming] Replacing file audio track with original audio track');
+        
+        // WebRTC 피어 연결에서 트랙 교체
+        webRTCManager.replaceTrack(currentAudioTrack, originalState.audio, localStream);
+        
+        // 로컬 스트림에서 트랙 교체
+        localStream.removeTrack(currentAudioTrack);
+        localStream.addTrack(originalState.audio);
+        
+        // 원래 enabled 상태 복원
+        originalState.audio.enabled = originalState.audioEnabled;
+        
+        // 파일 스트림 트랙 정지
+        currentAudioTrack.stop();
+        
+        console.log(`[FileStreaming] Audio track restored, enabled: ${originalState.audioEnabled}`);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('[FileStreaming] Failed to restore original tracks:', error);
+      return false;
     }
   };
 
@@ -568,40 +677,73 @@ export const useFileStreaming = ({
     console.log('[FileStreaming] Stopping stream...');
     
     try {
-      // 비디오 정지
+      // 1. 비디오 정지
       if (videoRef.current && fileType === 'video') {
         videoRef.current.pause();
         videoRef.current.currentTime = 0;
         setVideoState(prev => ({ ...prev, isPaused: true, currentTime: 0 }));
       }
       
-      // 애니메이션 프레임 정리
+      // 2. 애니메이션 프레임 정리
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
       }
       
-      // 파일 스트림 트랙 정지
+      // 3. 원래 트랙으로 복원 (중요! 이것을 먼저 해야 함)
+      console.log('[FileStreaming] Restoring original camera/audio tracks...');
+      const tracksRestored = await restoreOriginalTracks();
+      
+      if (!tracksRestored) {
+        console.error('[FileStreaming] Failed to restore original tracks');
+        toast.error('Failed to restore camera. Please refresh the page.');
+      } else {
+        console.log('[FileStreaming] Original tracks restored successfully');
+      }
+      
+      // 4. 파일 스트림 정리 (트랙은 이미 restoreOriginalTracks에서 stop됨)
       if (fileStreamRef.current) {
+        // 남은 트랙이 있다면 정지
         fileStreamRef.current.getTracks().forEach(track => {
-          track.stop();
-          console.log(`[FileStreaming] Stopped track: ${track.label}`);
+          if (track.readyState === 'live') {
+            track.stop();
+          }
         });
         fileStreamRef.current = null;
       }
       
-      // 스트림 참조 정리
+      // 5. 기타 스트림 정리
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => {
-          track.stop();
+          if (track.readyState === 'live') {
+            track.stop();
+          }
         });
         streamRef.current = null;
       }
       
-      // 원본 스트림 복원
-      await restoreOriginalStreamWithState();
+      // 6. MediaDeviceStore 상태 복원
+      console.log('[FileStreaming] Restoring MediaDeviceStore state...');
+      const storeRestored = await restoreOriginalMediaState();
       
+      if (!storeRestored) {
+        console.error('[FileStreaming] Failed to restore MediaDeviceStore state');
+      } else {
+        console.log('[FileStreaming] MediaDeviceStore state restored successfully');
+      }
+      
+      // 7. 파일 스트리밍 상태 해제
+      setFileStreaming(false);
       setIsStreaming(false);
+      
+      // 8. 원본 트랙 참조 초기화
+      originalTracksRef.current = {
+        video: null,
+        audio: null,
+        videoEnabled: false,
+        audioEnabled: false
+      };
+      
       updateDebugInfo({ 
         streamCreated: false, 
         streamActive: false, 
@@ -609,53 +751,17 @@ export const useFileStreaming = ({
         audioEnabled: false
       });
       
-      toast.info('Stopped file streaming');
+      toast.info('Stopped file streaming and restored camera');
       
     } catch (error) {
       logError(`Error during stop streaming: ${error}`);
-      toast.error('Error stopping stream');
-    }
-  }, [fileType, setIsStreaming, updateDebugInfo, setVideoState]);
-
-  const restoreOriginalStreamWithState = async () => {
-    if (!localStream || !webRTCManager) return;
-    
-    const originalState = originalTracksRef.current;
-    
-    if (fileStreamRef.current && originalState) {
-      const fileVideoTrack = fileStreamRef.current.getVideoTracks()[0];
-      const fileAudioTrack = fileStreamRef.current.getAudioTracks()[0];
+      toast.error('Error stopping stream. Please refresh the page.');
       
-      if (originalState.video && fileVideoTrack) {
-        webRTCManager.replaceTrack(fileVideoTrack, originalState.video, localStream);
-        localStream.removeTrack(fileVideoTrack);
-        localStream.addTrack(originalState.video);
-        
-        originalState.video.enabled = originalState.videoEnabled;
-        console.log(`[FileStreaming] Restored video track enabled state to: ${originalState.videoEnabled}`);
-      } else if (fileVideoTrack) {
-        localStream.removeTrack(fileVideoTrack);
-        webRTCManager.removeTrackFromAllPeers(fileVideoTrack, localStream);
-      }
-      
-      if (originalState.audio && fileAudioTrack) {
-        webRTCManager.replaceTrack(fileAudioTrack, originalState.audio, localStream);
-        localStream.removeTrack(fileAudioTrack);
-        localStream.addTrack(originalState.audio);
-        
-        originalState.audio.enabled = originalState.audioEnabled;
-        console.log(`[FileStreaming] Restored audio track enabled state to: ${originalState.audioEnabled}`);
-      } else if (fileAudioTrack) {
-        localStream.removeTrack(fileAudioTrack);
-        webRTCManager.removeTrackFromAllPeers(fileAudioTrack, localStream);
-      }
+      // 오류 발생 시에도 상태는 복원 시도
+      setFileStreaming(false);
+      setIsStreaming(false);
     }
-    
-    const snapshot = streamStateManager.current.getSnapshot();
-    if (snapshot?.streamType === 'none' || streamStateManager.current.isDummyStream()) {
-      console.log('[FileStreaming] Maintaining dummy stream state');
-    }
-  };
+  }, [fileType, setIsStreaming, updateDebugInfo, setVideoState, restoreOriginalMediaState, setFileStreaming, webRTCManager, localStream]);
 
   const cleanupResources = useCallback(() => {
     console.log('[FileStreaming] Cleaning up resources...');
@@ -707,11 +813,11 @@ export const useFileStreaming = ({
     frameCountRef.current = 0;
     streamStateManager.current.reset();
     recoveryManager.current.reset();
-    originalTracksRef.current = { 
-      video: null, 
-      audio: null, 
-      videoEnabled: false, 
-      audioEnabled: false 
+    originalTracksRef.current = {
+      video: null,
+      audio: null,
+      videoEnabled: false,
+      audioEnabled: false
     };
     
     console.log('[FileStreaming] Resource cleanup completed');

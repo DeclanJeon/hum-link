@@ -17,8 +17,8 @@ export interface PeerState {
   isSharingScreen: boolean;
   connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
   transcript?: { text: string; isFinal: boolean; lang: string };
-  audioLevel?: number;
-  isStreamingFile?: boolean; // 파일 스트리밍 상태 추가
+  // audioLevel 제거 - 로컬에서만 계산하여 사용
+  isStreamingFile?: boolean;
 }
 
 interface PeerConnectionEvents {
@@ -68,16 +68,16 @@ interface PeerConnectionActions {
   resumeFileTransfer: (transferId: string) => void;
   cleanup: () => void;
   updatePeerMediaState: (userId: string, kind: 'audio' | 'video', enabled: boolean) => void;
-  updatePeerStreamingState: (userId: string, isStreaming: boolean) => void; // 추가
+  updatePeerStreamingState: (userId: string, isStreaming: boolean) => void;
   resolveAck: (transferId: string, chunkIndex: number) => void;
   updateTransferProgress: (transferId: string, metrics: Partial<FileTransferMetrics>) => void;
   
-  // 스트림 관리
+  // 스트림 관련
   addStreamToAllPeers: (stream: MediaStream) => Promise<void>;
   removeStreamFromAllPeers: (stream: MediaStream) => void;
   replaceStreamTrack: (oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack) => void;
   
-  updatePeerAudioLevel: (userId: string, level: number) => void;
+  // updatePeerAudioLevel 제거 - 불필요한 스토어 업데이트 제거
 }
 
 export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectionActions>((set, get) => ({
@@ -130,7 +130,7 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         videoEnabled: true,
         isSharingScreen: false,
         connectionState: 'connecting',
-        isStreamingFile: false // 초기값 false
+        isStreamingFile: false
       });
     }));
   },
@@ -590,15 +590,7 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         console.log(`[PeerConnection] Peer ${userId} streaming state: ${isStreaming}`);
       }
     }));
-  },
+  }
 
-  updatePeerAudioLevel: (userId, level) => {
-    set(produce(state => {
-      const peer = state.peers.get(userId);
-      if (peer) {
-        peer.audioLevel = level;
-      }
-    }));
-  },
-
+  // updatePeerAudioLevel 메서드 제거됨
 }));
