@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Room Orchestrator Hook - 방 관리 오케스트레이터
+ * @module hooks/useRoomOrchestrator
+ */
+
 import { useEffect, useCallback } from 'react';
 import { produce } from 'immer';
 import { useSignalingStore } from '@/stores/useSignalingStore';
@@ -7,6 +12,8 @@ import { useChatStore } from '@/stores/useChatStore';
 import { useUIManagementStore } from '@/stores/useUIManagementStore';
 import { useWhiteboardStore } from '@/stores/useWhiteboardStore';
 import { useTranscriptionStore } from '@/stores/useTranscriptionStore';
+import { useSubtitleStore } from '@/stores/useSubtitleStore';
+import { useFileStreamingStore } from '@/stores/useFileStreamingStore';
 import { ENV } from '@/config';
 
 interface RoomParams {
@@ -22,7 +29,12 @@ type ChannelMessage =
   | { type: 'whiteboard-event'; payload: any }
   | { type: 'file-meta'; payload: any }
   | { type: 'file-ack'; payload: { transferId: string; chunkIndex: number } }
-  | { type: 'transcription'; payload: { text: string; isFinal: boolean; lang: string } };
+  | { type: 'transcription'; payload: { text: string; isFinal: boolean; lang: string } }
+  | { type: 'subtitle-sync'; payload: { currentTime: number; cueId: string | null; activeTrackId: string | null; timestamp: number } }
+  | { type: 'subtitle-seek'; payload: { currentTime: number; timestamp: number } }
+  | { type: 'subtitle-state'; payload: any }
+  | { type: 'subtitle-track'; payload: any }
+  | { type: 'file-streaming-state'; payload: { isStreaming: boolean; fileType: string } };
 
 function isChannelMessage(obj: any): obj is ChannelMessage {
     return obj && typeof obj.type === 'string' && 'payload' in obj;
@@ -36,12 +48,29 @@ interface SignalingDataPayload {
 
 export const useRoomOrchestrator = (params: RoomParams | null) => {
   const { connect, disconnect } = useSignalingStore();
-  const { initialize: initPeerConnection, cleanup: cleanupPeerConnection, createPeer, receiveSignal, removePeer, updatePeerMediaState, resolveAck } = usePeerConnectionStore();
+  const { 
+    initialize: initPeerConnection, 
+    cleanup: cleanupPeerConnection, 
+    createPeer, 
+    receiveSignal, 
+    removePeer, 
+    updatePeerMediaState, 
+    resolveAck,
+    updatePeerStreamingState 
+  } = usePeerConnectionStore();
   const { setLocalStream, cleanup: cleanupMediaDevice } = useMediaDeviceStore();
   const { addMessage, setTypingState, handleIncomingChunk, addFileMessage } = useChatStore();
   const { incrementUnreadMessageCount } = useUIManagementStore();
   const { applyRemoteDrawEvent, reset: resetWhiteboard } = useWhiteboardStore();
   const { cleanup: cleanupTranscription } = useTranscriptionStore();
+  const { 
+    receiveSubtitleState, 
+    receiveSubtitleSync,
+    setRemoteSubtitleCue,
+    tracks, 
+    activeTrackId 
+  } = useSubtitleStore();
+  const { isStreaming: isLocalStreaming } = useFileStreamingStore();
 
   const handleChannelMessage = useCallback((peerId: string, data: any) => {
     try {
@@ -59,18 +88,23 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
                     incrementUnreadMessageCount();
                 }
                 break;
+                
             case 'typing-state':
                 if (sender) setTypingState(peerId, sender.nickname, parsedData.payload.isTyping);
                 break;
+                
             case 'whiteboard-event':
                 applyRemoteDrawEvent(parsedData.payload);
                 break;
+                
             case 'file-meta':
                 addFileMessage(peerId, senderNickname, parsedData.payload, false);
                 break;
+                
             case 'file-ack':
                 resolveAck(parsedData.payload.transferId, parsedData.payload.chunkIndex);
                 break;
+                
             case 'transcription':
                 usePeerConnectionStore.setState(
                     produce(state => {
@@ -79,6 +113,72 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
                     })
                 );
                 break;
+            
+            // 파일 스트리밍 상태 동기화
+            case 'file-streaming-state':
+                {
+                    const { isStreaming, fileType } = parsedData.payload;
+                    // 피어의 파일 스트리밍 상태 업데이트
+                    if (updatePeerStreamingState) {
+                        updatePeerStreamingState(peerId, isStreaming);
+                    }
+                    
+                    // 원격 자막 활성화 상태 업데이트
+                    if (isStreaming && fileType === 'video') {
+                        useSubtitleStore.setState({ isRemoteSubtitleEnabled: true });
+                    } else if (!isStreaming) {
+                        useSubtitleStore.setState({ 
+                            isRemoteSubtitleEnabled: false,
+                            remoteSubtitleCue: null 
+                        });
+                    }
+                }
+                break;
+        
+            // 자막 동기화 메시지 처리
+            case 'subtitle-sync':
+                {
+                    const { currentTime, cueId, activeTrackId: remoteTrackId } = parsedData.payload;
+                    
+                    // 원격 피어가 파일 스트리밍 중인지 확인
+                    const peer = peers.get(peerId);
+                    if (peer?.isStreamingFile) {
+                        // 자막 동기화 수신
+                        receiveSubtitleSync(currentTime, cueId, remoteTrackId);
+                    }
+                }
+                break;
+          
+            case 'subtitle-seek':
+                {
+                    const { currentTime } = parsedData.payload;
+                    // 원격 비디오 시크에 따른 자막 동기화
+                    const subtitleStore = useSubtitleStore.getState();
+                    subtitleStore.syncWithRemoteVideo(currentTime);
+                }
+                break;
+          
+            case 'subtitle-state':
+                // 자막 설정 상태 수신
+                receiveSubtitleState(parsedData.payload);
+                break;
+          
+            case 'subtitle-track':
+                // 자막 트랙 수신
+                {
+                    const { track } = parsedData.payload;
+                    useSubtitleStore.setState(
+                        produce(state => {
+                            state.remoteTracks.set(track.id, track);
+                            // 첫 번째 원격 트랙이면 자동 활성화
+                            if (!state.remoteActiveTrackId) {
+                                state.remoteActiveTrackId = track.id;
+                            }
+                        })
+                    );
+                }
+                break;
+          
             default:
                 console.warn(`[Orchestrator] Unknown JSON message type: ${parsedData}`);
         }
@@ -89,7 +189,19 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
             console.error("Failed to process DataChannel message as JSON:", error, "Raw data:", data.toString());
         }
     }
-  }, [addMessage, setTypingState, applyRemoteDrawEvent, incrementUnreadMessageCount, handleIncomingChunk, addFileMessage, resolveAck]);
+  }, [
+    addMessage,
+    setTypingState,
+    applyRemoteDrawEvent,
+    incrementUnreadMessageCount,
+    handleIncomingChunk,
+    addFileMessage,
+    resolveAck,
+    receiveSubtitleState,
+    receiveSubtitleSync,
+    setRemoteSubtitleCue,
+    updatePeerStreamingState
+  ]);
 
   useEffect(() => {
     if (!params) return;
@@ -100,8 +212,8 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
     initPeerConnection(localStream, { onData: handleChannelMessage });
 
     const signalingEvents = {
-      onConnect: () => console.log('[SIGNALING_CORE]      .'),
-      onDisconnect: () => console.log('[SIGNALING_CORE]     .'),
+      onConnect: () => console.log('[SIGNALING_CORE] 서버에 연결되었습니다.'),
+      onDisconnect: () => console.log('[SIGNALING_CORE] 서버와의 연결이 끊어졌습니다.'),
       onRoomUsers: (users: { id: string; nickname: string }[]) => {
         users.forEach(user => {
             createPeer(user.id, user.nickname, true);
@@ -134,4 +246,19 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
       resetWhiteboard();
     };
   }, [params]);
+  
+  // 파일 스트리밍 상태 변경 감지 및 브로드캐스트
+  useEffect(() => {
+    if (isLocalStreaming !== undefined) {
+      const { sendToAllPeers } = usePeerConnectionStore.getState();
+      const { fileType } = useFileStreamingStore.getState();
+      
+      const message = JSON.stringify({
+        type: 'file-streaming-state',
+        payload: { isStreaming: isLocalStreaming, fileType }
+      });
+      
+      sendToAllPeers(message);
+    }
+  }, [isLocalStreaming]);
 };

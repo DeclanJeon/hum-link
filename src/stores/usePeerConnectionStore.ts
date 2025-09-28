@@ -17,7 +17,8 @@ export interface PeerState {
   isSharingScreen: boolean;
   connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
   transcript?: { text: string; isFinal: boolean; lang: string };
-  audioLevel?: number; // 추가
+  audioLevel?: number;
+  isStreamingFile?: boolean; // 파일 스트리밍 상태 추가
 }
 
 interface PeerConnectionEvents {
@@ -34,7 +35,7 @@ interface FileTransferMetrics {
   totalChunks: number;
   windowSize: number;
   inFlight: number;
-  lastUpdateTime?: number; // 추가
+  lastUpdateTime?: number;
 }
 
 interface FileTransferState {
@@ -67,16 +68,16 @@ interface PeerConnectionActions {
   resumeFileTransfer: (transferId: string) => void;
   cleanup: () => void;
   updatePeerMediaState: (userId: string, kind: 'audio' | 'video', enabled: boolean) => void;
+  updatePeerStreamingState: (userId: string, isStreaming: boolean) => void; // 추가
   resolveAck: (transferId: string, chunkIndex: number) => void;
-  updateTransferProgress: (transferId: string, metrics: Partial<FileTransferMetrics>) => void; // 새 메서드
+  updateTransferProgress: (transferId: string, metrics: Partial<FileTransferMetrics>) => void;
   
-  // 스트림 관련 새 액션들
+  // 스트림 관리
   addStreamToAllPeers: (stream: MediaStream) => Promise<void>;
   removeStreamFromAllPeers: (stream: MediaStream) => void;
   replaceStreamTrack: (oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack) => void;
   
-  // ... 기존 actions ...
-  updatePeerAudioLevel: (userId: string, level: number) => void; // 추가
+  updatePeerAudioLevel: (userId: string, level: number) => void;
 }
 
 export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectionActions>((set, get) => ({
@@ -128,7 +129,8 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         audioEnabled: true,
         videoEnabled: true,
         isSharingScreen: false,
-        connectionState: 'connecting'
+        connectionState: 'connecting',
+        isStreamingFile: false // 초기값 false
       });
     }));
   },
@@ -149,7 +151,8 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
           audioEnabled: true,
           videoEnabled: true,
           isSharingScreen: false,
-          connectionState: 'connecting'
+          connectionState: 'connecting',
+          isStreamingFile: false
         });
       }));
     }
@@ -190,18 +193,15 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       return;
     }
 
-    // 각 peer에게 스트림 추가
     for (const [peerId, peerState] of peers) {
       try {
         const peer = (webRTCManager as any).peers.get(peerId);
         if (peer && !peer.destroyed) {
           console.log(`[STREAM] Adding stream to peer ${peerId}`);
           
-          // Simple-peer의 addStream 메소드 사용
           if (peer.addStream) {
             peer.addStream(stream);
           } else {
-            // 또는 트랙별로 추가
             stream.getTracks().forEach(track => {
               peer.addTrack(track, stream);
             });
@@ -255,7 +255,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         payload: { transferId, chunkIndex }
       });
       
-      // ACK 받을 때마다 즉시 메트릭 업데이트
       const newAckedCount = (transfer.metrics.chunksAcked || 0) + 1;
       get().updateTransferProgress(transferId, {
         chunksAcked: newAckedCount,
@@ -264,19 +263,16 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
     }
   },
 
-  // 새로운 메서드: 진행률 업데이트 전용
   updateTransferProgress: (transferId, metrics) => {
     set(produce(state => {
       const transfer = state.activeTransfers.get(transferId);
       if (transfer) {
-        // 메트릭 업데이트
         transfer.metrics = {
           ...transfer.metrics,
           ...metrics,
           lastUpdateTime: Date.now()
         };
         
-        // 디버그 로그
         const progress = metrics.progress || transfer.metrics.progress;
         if (progress > 0) {
           console.log(`[TRANSFER_PROGRESS] ${transferId}: ${(progress * 100).toFixed(1)}% (${transfer.metrics.chunksAcked}/${transfer.metrics.totalChunks})`);
@@ -284,7 +280,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       }
     }));
     
-    // ChatStore도 즉시 업데이트
     const transfer = get().activeTransfers.get(transferId);
     if (transfer && metrics.progress !== undefined) {
       const { updateFileProgress } = useChatStore.getState();
@@ -314,15 +309,7 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       return;
     }
 
-    // 크기 제한 체크 제거 또는 옵션으로 변경
-    // if (!isValidFileSize(file.size)) {
-    //   console.error("[FILE_TRANSFER] File size exceeds limit (50GB).");
-    //   toast.error("File size exceeds the maximum limit of 50GB.");
-    //   return;
-    // }
-
-    // 대신 경고만 표시
-    if (file.size > 1024 * 1024 * 1024) { // 1GB 이상
+    if (file.size > 1024 * 1024 * 1024) {
       toast.warning(`Large file (${(file.size / (1024 * 1024 * 1024)).toFixed(2)}GB). Transfer may take time.`);
     }
 
@@ -341,22 +328,18 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
 
     console.log(`[FILE_TRANSFER] Starting transfer: ${file.name} (${(file.size/1024/1024).toFixed(2)}MB, ${totalChunks} chunks)`);
 
-    // UI 업데이트 - 파일 메시지 추가
     await addFileMessage(sessionInfo.userId, sessionInfo.nickname, fileMeta, true);
     
-    // 다른 피어들에게 파일 메타데이터 전송
     sendToAllPeers(JSON.stringify({ 
       type: 'file-meta', 
       payload: fileMeta 
     }));
 
-    // Worker 생성
     const worker = new Worker(
       new URL('../workers/file.worker.ts', import.meta.url),
       { type: 'module' }
     );
 
-    // 초기 메트릭스
     const initialMetrics: FileTransferMetrics = {
       progress: 0,
       sendProgress: 0,
@@ -383,13 +366,11 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       state.activeTransfers.set(transferId, transferState);
     }));
 
-    // Worker 메시지 핸들러
     worker.onmessage = async (event) => {
       const { type, payload } = event.data;
       
       switch (type) {
         case 'chunk-ready':
-          // 청크 전송
           if (payload.needsFlowControl) {
             const { webRTCManager } = get();
             const peers = Array.from(get().peers.keys());
@@ -415,7 +396,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
             }
           }
           
-          // 청크 전송할 때마다 sendProgress 업데이트
           if (payload.chunkIndex !== undefined) {
             const transfer = get().activeTransfers.get(payload.transferId);
             if (transfer) {
@@ -429,7 +409,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
           break;
           
         case 'progress-update':
-          // Worker에서 오는 진행률 업데이트를 즉시 반영
           get().updateTransferProgress(payload.transferId, {
             progress: payload.progress,
             sendProgress: payload.sendProgress,
@@ -449,7 +428,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
             `Speed: ${(payload.avgSpeed / 1024 / 1024).toFixed(2)} MB/s`
           );
           
-          // 완료 상태 업데이트
           get().updateTransferProgress(payload.transferId, {
             progress: 1,
             sendProgress: 1,
@@ -457,10 +435,8 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
             chunksSent: payload.totalChunks
           });
           
-          // Worker 종료
           worker.terminate();
           
-          // 잠시 후 activeTransfer 정리
           setTimeout(() => {
             set(produce(state => {
               state.activeTransfers.delete(payload.transferId);
@@ -508,7 +484,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
           break;
           
         case 'debug-log':
-          // Worker에서 오는 디버그 로그
           console.log(`[WORKER] ${payload.message}`);
           break;
       }
@@ -523,7 +498,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
       }));
     };
 
-    // Worker 시작
     worker.postMessage({
       type: 'start-transfer',
       payload: { file, transferId }
@@ -604,6 +578,16 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         } else if (kind === 'video') {
           peer.videoEnabled = enabled;
         }
+      }
+    }));
+  },
+
+  updatePeerStreamingState: (userId, isStreaming) => {
+    set(produce(state => {
+      const peer = state.peers.get(userId);
+      if (peer) {
+        peer.isStreamingFile = isStreaming;
+        console.log(`[PeerConnection] Peer ${userId} streaming state: ${isStreaming}`);
       }
     }));
   },

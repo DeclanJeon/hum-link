@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import translate from 'translate';
 
 interface SubtitleOverlayProps {
-  transcript?: { text: string; isFinal: boolean; lang: string };
+  transcript?: { text: string; isFinal: boolean; lang?: string };
   targetLang: string;
 }
 
@@ -15,24 +15,27 @@ export const SubtitleOverlay = ({ transcript, targetLang }: SubtitleOverlayProps
   const translationId = useMemo(() => transcript?.text, [transcript?.text, transcript?.isFinal]);
 
   useEffect(() => {
-    if (transcript?.isFinal && transcript.text && targetLang !== 'none' && transcript.lang.split('-')[0] !== targetLang) {
-      let isCancelled = false;
-      const currentTranslationId = translationId;
+    if (transcript?.isFinal && transcript.text && targetLang !== 'none') {
+      const sourceLang = transcript.lang?.split('-')[0] || 'en';
+      if (sourceLang !== targetLang) {
+        let isCancelled = false;
+        const currentTranslationId = translationId;
 
-      translate(transcript.text, { from: transcript.lang.split('-')[0], to: targetLang })
-        .then(text => {
-          if (!isCancelled && currentTranslationId === translationId) {
-            setTranslatedText(text);
-          }
-        })
-        .catch(err => {
-          console.error("Translation error:", err);
-          if (!isCancelled) setTranslatedText('');
-        });
+        translate(transcript.text, { from: sourceLang, to: targetLang })
+          .then(text => {
+            if (!isCancelled && currentTranslationId === translationId) {
+              setTranslatedText(text);
+            }
+          })
+          .catch(err => {
+            console.error("Translation error:", err);
+            if (!isCancelled) setTranslatedText('');
+          });
 
-      return () => {
-        isCancelled = true;
-      };
+        return () => {
+          isCancelled = true;
+        };
+      }
     } else {
       setTranslatedText(''); // 번역이 필요 없거나 중간 결과일 경우 비움
     }
