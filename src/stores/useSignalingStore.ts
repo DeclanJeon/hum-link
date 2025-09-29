@@ -131,6 +131,7 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
         // PeerConnectionStore에 ICE 서버 업데이트
         const { webRTCManager } = usePeerConnectionStore.getState();
         if (webRTCManager) {
+          console.log(data.iceServers)
           webRTCManager.updateIceServers(data.iceServers);
         }
         
