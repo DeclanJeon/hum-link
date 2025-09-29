@@ -2,7 +2,7 @@ export default {
     apps: [{
       name: 'ponslink',
       script: 'serve',
-      args: '-s build -l 8080',  // build 폴더를 3000번 포트로 서빙
+      args: '-s build -l 8080',  // build 폴더를 8080번 포트로 서빙
       env: {
         PM2_SERVE_PATH: './build',
         PM2_SERVE_PORT: 8080,
@@ -18,4 +18,4 @@ export default {
       log_file: './logs/combined.log',
       time: true
     }]
-  };
+}
