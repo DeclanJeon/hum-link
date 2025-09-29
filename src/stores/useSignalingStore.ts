@@ -49,7 +49,10 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
     if (get().socket) return;
 
     set({ status: 'connecting' });
-    const socket = io(ENV.VITE_SIGNALING_SERVER_URL);
+    const socket = io(ENV.VITE_SIGNALING_SERVER_URL, {
+      path: '/socket.io',
+      transports: ['websocket', 'polling']
+    });
 
     socket.on('connect', () => {
       set({ status: 'connected' });
