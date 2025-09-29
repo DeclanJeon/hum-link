@@ -1,6 +1,7 @@
 // src/services/webrtc.ts
 import Peer from 'simple-peer/simplepeer.min.js';
 import type { Instance as PeerInstance, SignalData } from 'simple-peer';
+import { useSignalingStore } from '@/stores/useSignalingStore';
 
 interface WebRTCEvents {
   onSignal: (peerId: string, signal: SignalData) => void;
@@ -37,7 +38,30 @@ export class WebRTCManager {
     this.events = events;
   }
 
+  private iceServers: RTCIceServer[] = [
+    // 기본 STUN 서버만 (TURN은 동적으로 받음)
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ];
+  
+  /**
+   * ICE 서버 동적 업데이트
+   */
+  public updateIceServers(servers: RTCIceServer[]): void {
+    this.iceServers = servers;
+    console.log('[WebRTC] ICE 서버 업데이트 (TURN 포함)');
+    
+    // 디버그: TURN 서버 확인
+    const turnServers = servers.filter(s => 
+      s.urls.toString().includes('turn')
+    );
+    console.log(`[WebRTC] TURN 서버 ${turnServers.length}개 구성됨`);
+  }
+
   public createPeer(peerId: string, initiator: boolean): PeerInstance {
+
+    const { iceServers } = useSignalingStore.getState();
+
     if (this.peers.has(peerId)) {
       this.removePeer(peerId);
     }
@@ -47,18 +71,19 @@ export class WebRTCManager {
       trickle: true,
       channelConfig: DATACHANNEL_CONFIG,
       config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' }
-        ],
-        iceCandidatePoolSize: 10
+        iceServers: iceServers || this.iceServers,
+        iceCandidatePoolSize: 10,
+        iceTransportPolicy: 'all', // 'relay'로 설정하면 TURN만 사용
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
       },
       offerOptions: {
         offerToReceiveAudio: true,
         offerToReceiveVideo: true
       }
     };
+
+    console.log(`[WebRTC] Peer ${peerId} 생성 (ICE 서버: ${peerConfig.config.iceServers.length}개)`);
 
     if (this.localStream && this.localStream.getTracks().length > 0) {
       peerConfig.stream = this.localStream;

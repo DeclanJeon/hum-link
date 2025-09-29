@@ -50,7 +50,7 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
   const { connect, disconnect } = useSignalingStore();
   const { 
     initialize: initPeerConnection, 
-    cleanup: cleanupPeerConnection, 
+    cleanup: cleanupPeerConnection,
     createPeer, 
     receiveSignal, 
     removePeer, 
@@ -212,7 +212,12 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
     initPeerConnection(localStream, { onData: handleChannelMessage });
 
     const signalingEvents = {
-      onConnect: () => console.log('[SIGNALING_CORE] 서버에 연결되었습니다.'),
+      onConnect: () => {
+        console.log('[SIGNALING_CORE] 서버에 연결되었습니다.')
+        // 연결 즉시 TURN 자격증명 요청
+        const socket = useSignalingStore.getState().socket;
+        socket?.emit('request-turn-credentials');
+      },
       onDisconnect: () => console.log('[SIGNALING_CORE] 서버와의 연결이 끊어졌습니다.'),
       onRoomUsers: (users: { id: string; nickname: string }[]) => {
         users.forEach(user => {

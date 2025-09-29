@@ -4,6 +4,8 @@ import { io, Socket } from 'socket.io-client';
 import { SignalData } from 'simple-peer';
 import { ENV } from '@/config';
 import { ChatMessage } from './useChatStore';
+import { usePeerConnectionStore } from './usePeerConnectionStore';
+import { toast } from 'sonner';
 
 type SignalingStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -27,6 +29,7 @@ interface SignalingEvents {
 interface SignalingState {
   socket: Socket | null;
   status: SignalingStatus;
+  iceServers: RTCIceServer[] | null; // 추가
 }
 
 interface SignalingActions {
@@ -39,6 +42,7 @@ interface SignalingActions {
 
 export const useSignalingStore = create<SignalingState & SignalingActions>((set, get) => ({
   socket: null,
+  iceServers: null,
   status: 'disconnected',
 
   connect: (roomId, userId, nickname, events) => {
@@ -109,6 +113,31 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
         events.onUserLeft(userId);
     });
 
+    // TURN 자격증명 수신 핸들러
+    socket.on('turn-credentials', (data) => {
+      if (data.error) {
+        console.error('[Signaling] TURN 자격증명 오류:', data.error);
+        toast.error('연결 설정 실패. 관리자에게 문의하세요.');
+        return;
+      }
+      
+      if (data.iceServers) {
+        console.log('[Signaling] TURN 자격증명 수신 완료');
+        set({ iceServers: data.iceServers });
+        
+        // PeerConnectionStore에 ICE 서버 업데이트
+        const { webRTCManager } = usePeerConnectionStore.getState();
+        if (webRTCManager) {
+          webRTCManager.updateIceServers(data.iceServers);
+        }
+        
+        // 연결 품질 향상을 위한 알림
+        toast.success('보안 연결이 설정되었습니다', {
+          duration: 2000
+        });
+      }
+    });
+    
     set({ socket });
   },
 

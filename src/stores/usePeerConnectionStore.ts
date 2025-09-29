@@ -57,6 +57,7 @@ interface PeerConnectionState {
 interface PeerConnectionActions {
   initialize: (localStream: MediaStream, events: PeerConnectionEvents) => void;
   createPeer: (userId: string, nickname: string, initiator: boolean) => void;
+  updateIceServers: (servers: RTCIceServer[]) => void;
   receiveSignal: (from: string, nickname: string, signal: SignalData) => void;
   removePeer: (userId: string) => void;
   sendToAllPeers: (message: any) => { successful: string[], failed: string[] };
@@ -590,7 +591,18 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         console.log(`[PeerConnection] Peer ${userId} streaming state: ${isStreaming}`);
       }
     }));
-  }
+  },
 
-  // updatePeerAudioLevel 메서드 제거됨
+  /**
+ * ICE 서버 동적 업데이트
+ */
+  updateIceServers: (servers: RTCIceServer[]) => {
+    const { webRTCManager } = get();
+    if (webRTCManager) {
+      webRTCManager.updateIceServers(servers);
+      console.log('[PeerConnectionStore] ICE 서버 업데이트 완료');
+    } else {
+      console.warn('[PeerConnectionStore] WebRTCManager가 아직 초기화되지 않음');
+    }
+  },
 }));
