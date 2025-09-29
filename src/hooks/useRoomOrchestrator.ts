@@ -214,9 +214,6 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
     const signalingEvents = {
       onConnect: () => {
         console.log('[SIGNALING_CORE] 서버에 연결되었습니다.')
-        // 연결 즉시 TURN 자격증명 요청
-        const socket = useSignalingStore.getState().socket;
-        socket?.emit('request-turn-credentials');
       },
       onDisconnect: () => console.log('[SIGNALING_CORE] 서버와의 연결이 끊어졌습니다.'),
       onRoomUsers: (users: { id: string; nickname: string }[]) => {
@@ -233,6 +230,8 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
       onSignal: ({ from, signal }: { from: string; signal: any }) => {
         const peer = usePeerConnectionStore.getState().peers.get(from);
         receiveSignal(from, peer?.nickname || 'Unknown', signal);
+        const socket = useSignalingStore.getState().socket;
+        socket?.emit('request-turn-credentials');
       },
       onMediaState: ({ userId, kind, enabled }: { userId: string; kind: 'audio' | 'video'; enabled: boolean }) => {
         updatePeerMediaState(userId, kind, enabled);

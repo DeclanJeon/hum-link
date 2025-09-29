@@ -118,11 +118,11 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
 
     // TURN 자격증명 수신 핸들러
     socket.on('turn-credentials', (data) => {
-      if (data.error) {
-        console.error('[Signaling] TURN 자격증명 오류:', data.error);
-        toast.error('연결 설정 실패. 관리자에게 문의하세요.');
-        return;
-      }
+      // if (data.error) {
+      //   console.error('[Signaling] TURN 자격증명 오류:', data.error);
+      //   toast.error('연결 설정 실패. 관리자에게 문의하세요.');
+      //   return;
+      // }
       
       if (data.iceServers) {
         console.log('[Signaling] TURN 자격증명 수신 완료');
