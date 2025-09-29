@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import nicknamesData from '@/data/nicknames.json';
 
 interface LandingState {
   roomTitle: string;
@@ -22,13 +23,12 @@ export const useLandingStore = create<LandingState & LandingActions>((set, get) 
   setNickname: (nickname: string) => set({ nickname }),
 
   generateRandomNickname: () => {
-    const adjectives = ["Brilliant", "Curious", "Radiant", "Wandering", "Inspiring", "Creative", "Thoughtful", "Dynamic"];
-    const nouns = ["Explorer", "Innovator", "Dreamer", "Architect", "Visionary", "Creator", "Pioneer", "Builder"];
+    const { adjectives, animals } = nicknamesData; // <-- 'nouns' 대신 'animals'를 불러옵니다!
     
     const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
-    const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+    const randomAnimal = animals[Math.floor(Math.random() * animals.length)];
     
-    const generatedName = `${randomAdjective} ${randomNoun}`;
+    const generatedName = `${randomAdjective} ${randomAnimal}`;
     set({ nickname: generatedName });
     return generatedName;
   },

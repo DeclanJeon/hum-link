@@ -1,0 +1,27 @@
+{
+    "adjectives": [
+      "Brilliant", "Curious", "Radiant", "Wandering", "Inspiring", "Creative", "Thoughtful", "Dynamic",
+      "Agile", "Bold", "Clever", "Daring", "Eloquent", "Fierce", "Gentle", "Humble",
+      "Intrepid", "Jovial", "Keen", "Luminous", "Mighty", "Noble", "Optimistic", "Pondering",
+      "Quirky", "Resilient", "Serene", "Tenacious", "Unique", "Vibrant", "Witty", "Xenial",
+      "Youthful", "Zealous", "Adept", "Breezy", "Calm", "Diligent", "Eager", "Fanciful",
+      "Gracious", "Harmonious", "Imaginative", "Joyful", "Kindred", "Lively", "Mystic", "Nimble",
+      "Observant", "Pensive", "Quiet", "Resourceful", "Spirited", "Tactful", "Uplifting", "Valiant",
+      "Abstract", "Cosmic", "Ephemeral", "Galactic", "Holographic", "Infinite", "Kinetic", "Melodic",
+      "Nebulous", "Ornate", "Pristine", "Quizzical", "Rhythmic", "Sovereign", "Transcendent", "Utopian"
+    ],
+    "animals": [
+      "Lion", "Tiger", "Bear", "Wolf", "Fox", "Eagle", "Hawk", "Owl", "Dolphin", "Shark",
+      "Whale", "Panther", "Leopard", "Cheetah", "Jaguar", "Rhino", "Elephant", "Giraffe", "Zebra", "Hippo",
+      "Gorilla", "Chimpanzee", "Orangutan", "Koala", "Panda", "Kangaroo", "Wallaby", "Crocodile", "Alligator", "Snake",
+      "Cobra", "Python", "Chameleon", "Gecko", "Frog", "Toad", "Salamander", "Turtle", "Tortoise", "Penguin",
+      "Pelican", "Swan", "Duck", "Goose", "Sparrow", "Robin", "Raven", "Crow", "Pigeon", "Parrot",
+      "Toucan", "Hummingbird", "Butterfly", "Bee", "Ant", "Spider", "Scorpion", "Dragonfly", "Ladybug", "Snail",
+      "Crab", "Lobster", "Octopus", "Squid", "Jellyfish", "Starfish", "Seahorse", "Otter", "Beaver", "Raccoon",
+      "Squirrel", "Rabbit", "Hare", "Deer", "Moose", "Elk", "Bison", "Buffalo", "Camel", "Llama",
+      "Alpaca", "Horse", "Donkey", "Goat", "Sheep", "Pig", "Cow", "Dog", "Cat", "Ferret",
+      "GuineaPig", "Hamster", "Mouse", "Rat", "Hedgehog", "Badger", "Wolverine", "Platypus", "Echidna", "Kiwi",
+      "Ostrich", "Emu", "Flamingo", "Peacock", "Puma", "Coyote", "Lynx", "Badger", "Weasel", "Mink"
+    ]
+  }
+  

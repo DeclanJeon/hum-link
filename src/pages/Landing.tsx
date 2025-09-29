@@ -37,10 +37,10 @@ const Landing = () => {
       <div className="relative z-10 w-full max-w-md px-6">
         <div className="text-center mb-12">
           <h1 className="text-5xl font-bold mb-4 text-gradient animate-breathing">
-            Singularity
+            PonsLink
           </h1>
           <p className="text-muted-foreground text-lg">
-            Where conversations become connections
+            The World is Your Neighbor. Link Freely.
           </p>
         </div>
 

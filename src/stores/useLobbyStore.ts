@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
 import { mediaCapabilityDetector, MediaCapabilities } from '@/lib/mediaCapabilityDetector';
+import nicknamesData from '@/data/nicknames.json';
 
 interface ConnectionDetails {
   roomTitle: string;
@@ -38,11 +39,10 @@ interface LobbyActions {
 }
 
 const generateRandomNickname = () => {
-  const adjectives = ["Brilliant", "Curious", "Radiant", "Wandering", "Inspiring", "Creative", "Thoughtful", "Dynamic"];
-  const nouns = ["Explorer", "Innovator", "Dreamer", "Architect", "Visionary", "Creator", "Pioneer", "Builder"];
+  const { adjectives, animals } = nicknamesData;
   const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
-  return `${randomAdjective} ${randomNoun}`;
+  const randomAnimal = animals[Math.floor(Math.random() * animals.length)];
+  return `${randomAdjective} ${randomAnimal}`;
 };
 
 export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
@@ -50,8 +50,8 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   isAudioEnabled: true,
   isVideoEnabled: true,
   audioLevel: 0,
-  selectedAudioDevice: "",
-  selectedVideoDevice: "",
+  selectedAudioDevice: null,
+  selectedVideoDevice: null,
   stream: null,
   audioContext: null,
   analyser: null,
@@ -99,11 +99,32 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
       });
 
       // 실제 디바이스가 있는 경우 선택된 디바이스 설정
-      if (result.capabilities.microphones.length > 0 && !get().selectedAudioDevice) {
-        set({ selectedAudioDevice: result.capabilities.microphones[0].deviceId });
+      // if (result.capabilities.microphones.length > 0 && !get().selectedAudioDevice) {
+      //   set({ selectedAudioDevice: result.capabilities.microphones[0].deviceId });
+      // }
+      // if (result.capabilities.cameras.length > 0 && !get().selectedVideoDevice) {
+      //   set({ selectedVideoDevice: result.capabilities.cameras[0].deviceId });
+      // }
+
+          // 실제 디바이스가 있는 경우 선택된 디바이스 설정
+      if (result.capabilities.microphones.length > 0) {
+        // deviceId가 빈 문자열이 아닌지 확인!
+        const validMic = result.capabilities.microphones.find(
+          mic => mic.deviceId && mic.deviceId !== ""
+        );
+        if (validMic) {
+          set({ selectedAudioDevice: validMic.deviceId });
+        }
       }
-      if (result.capabilities.cameras.length > 0 && !get().selectedVideoDevice) {
-        set({ selectedVideoDevice: result.capabilities.cameras[0].deviceId });
+      
+      if (result.capabilities.cameras.length > 0) {
+        // 카메라도 동일하게 처리
+        const validCam = result.capabilities.cameras.find(
+          cam => cam.deviceId && cam.deviceId !== ""
+        );
+        if (validCam) {
+          set({ selectedVideoDevice: validCam.deviceId });
+        }
       }
 
       // 오디오 분석 초기화 (마이크가 있는 경우만)

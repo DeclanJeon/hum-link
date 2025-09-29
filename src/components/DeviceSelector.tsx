@@ -32,7 +32,7 @@ export const DeviceSelector = ({
               <SelectValue placeholder="Select microphone..." />
             </SelectTrigger>
             <SelectContent>
-              {audioDevices.map((device) => (
+              {audioDevices.filter(device => device.deviceId !== "").map((device) => (
                 <SelectItem key={device.deviceId} value={device.deviceId}>
                   {device.label}
                 </SelectItem>
@@ -52,7 +52,7 @@ export const DeviceSelector = ({
               <SelectValue placeholder="Select camera..." />
             </SelectTrigger>
             <SelectContent>
-              {videoDevices.map((device) => (
+              {videoDevices.filter(device => device.deviceId !== "").map((device) => (
                 <SelectItem key={device.deviceId} value={device.deviceId}>
                   {device.label}
                 </SelectItem>
