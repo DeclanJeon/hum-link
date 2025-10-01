@@ -1,4 +1,7 @@
+// frontend/src/hooks/useSpeechRecognition.ts
+
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useTranscriptionStore } from '@/stores/useTranscriptionStore';
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const isApiSupported = !!SpeechRecognition;
@@ -10,42 +13,73 @@ interface SpeechRecognitionOptions {
   onError?: (event: SpeechRecognitionErrorEvent) => void;
 }
 
-export const useSpeechRecognition = ({ lang, onResult, onEnd, onError }: SpeechRecognitionOptions) => {
+/**
+ * 음성인식 Hook (자동 언어 감지 지원)
+ */
+export const useSpeechRecognition = ({ 
+  lang, 
+  onResult, 
+  onEnd, 
+  onError 
+}: SpeechRecognitionOptions) => {
   const recognitionRef = useRef<typeof SpeechRecognition | null>(null);
   const [isListening, setIsListening] = useState(false);
-  
-  // [핵심 수정] 사용자의 '의도'를 저장합니다. API의 자동 종료와 사용자의 stop() 호출을 구분하기 위함입니다.
   const listeningIntentRef = useRef(false);
-  
-  // [추가] 재시도 횟수 관리
   const retryCountRef = useRef(0);
   const MAX_RETRIES = 3;
+  
+  const { setDetectedLanguage } = useTranscriptionStore();
 
+  /**
+   * 음성인식 초기화
+   */
   useEffect(() => {
     if (!isApiSupported) {
-      console.warn("Web Speech API is not supported in this browser.");
+      console.warn('[SpeechRecognition] Web Speech API is not supported');
       return;
     }
 
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
     
-    recognition.lang = lang;
-    recognition.continuous = true;
-    recognition.interimResults = true;
+    // 자동 언어 감지 설정
+    if (lang === 'auto') {
+      // Chrome/Edge: 여러 언어 후보 지정
+      recognition.lang = 'ko-KR'; // 기본값
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 3; // 다중 후보 활성화
+    } else {
+      recognition.lang = lang;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+    }
 
+    /**
+     * 음성인식 결과 처리
+     */
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      // [추가] 인식 성공 시 재시도 횟수 초기화
       retryCountRef.current = 0;
       
       let interimTranscript = '';
       let finalTranscript = '';
 
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
+        const result = event.results[i];
+        
+        // 자동 언어 감지 (첫 final 결과에서 언어 추출)
+        if (lang === 'auto' && result.isFinal && result[0]) {
+          const detectedLang = extractLanguageFromResult(result);
+          if (detectedLang) {
+            setDetectedLanguage(detectedLang);
+            console.log(`[SpeechRecognition] Detected language: ${detectedLang}`);
+          }
+        }
+        
+        if (result.isFinal) {
+          finalTranscript += result[0].transcript;
         } else {
-          interimTranscript += event.results[i][0].transcript;
+          interimTranscript += result[0].transcript;
         }
       }
       
@@ -54,13 +88,14 @@ export const useSpeechRecognition = ({ lang, onResult, onEnd, onError }: SpeechR
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.error('Speech recognition error:', event.error);
+      console.error('[SpeechRecognition] Error:', event.error);
       if (onError) onError(event);
     };
     
     recognition.onend = () => {
       setIsListening(false);
-      // [핵심 수정] 사용자가 명시적으로 stop을 호출하지 않았을 경우(의도가 true일 경우)에만 재시작합니다.
+      
+      // 자동 재시작 로직
       if (listeningIntentRef.current) {
         if (retryCountRef.current < MAX_RETRIES) {
           setTimeout(() => {
@@ -69,40 +104,44 @@ export const useSpeechRecognition = ({ lang, onResult, onEnd, onError }: SpeechR
               setIsListening(true);
               retryCountRef.current++;
             } catch(e) {
-              console.error("Error restarting recognition:", e);
+              console.error('[SpeechRecognition] Restart error:', e);
             }
-          }, 250); // 짧은 딜레이 추가
+          }, 250);
         } else {
-          console.error("Speech recognition failed after multiple retries.");
-          // 사용자에게 UI적으로 실패를 알리는 로직 추가 (e.g., toast)
-          retryCountRef.current = 0; // 재시도 횟수 초기화
+          console.error('[SpeechRecognition] Max retries exceeded');
+          retryCountRef.current = 0;
         }
       }
       if (onEnd) onEnd();
     };
 
-    // 언어가 변경될 때마다 기존 인스턴스를 정리하고 새로 생성합니다.
     return () => {
       listeningIntentRef.current = false;
       recognition.stop();
     };
-  }, [lang, onResult, onError, onEnd]);
+  }, [lang, onResult, onError, onEnd, setDetectedLanguage]);
 
+  /**
+   * 음성인식 시작
+   */
   const start = useCallback(() => {
     if (recognitionRef.current && !isListening) {
       try {
-        listeningIntentRef.current = true; // [핵심 수정] 듣기 '의도'를 true로 설정
+        listeningIntentRef.current = true;
         recognitionRef.current.start();
         setIsListening(true);
       } catch(e) {
-        console.error("Error starting recognition:", e);
+        console.error('[SpeechRecognition] Start error:', e);
       }
     }
   }, [isListening]);
 
+  /**
+   * 음성인식 중지
+   */
   const stop = useCallback(() => {
     if (recognitionRef.current && isListening) {
-      listeningIntentRef.current = false; // [핵심 수정] 듣기 '의도'를 false로 설정
+      listeningIntentRef.current = false;
       recognitionRef.current.stop();
       setIsListening(false);
     }
@@ -110,3 +149,36 @@ export const useSpeechRecognition = ({ lang, onResult, onEnd, onError }: SpeechR
 
   return { start, stop, isListening, isSupported: isApiSupported };
 };
+
+/**
+ * 음성인식 결과에서 언어 추출 (휴리스틱)
+ */
+function extractLanguageFromResult(result: SpeechRecognitionResult): string | null {
+  // Web Speech API는 공식적으로 감지 언어를 제공하지 않음
+  // 대안: 텍스트 패턴 기반 추론 (간단한 휴리스틱)
+  
+  const text = result[0].transcript;
+  
+  // 한글 감지
+  if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(text)) {
+    return 'ko-KR';
+  }
+  
+  // 일본어 감지 (히라가나, 가타카나, 한자)
+  if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(text)) {
+    return 'ja-JP';
+  }
+  
+  // 중국어 감지 (간체/번체)
+  if (/[\u4E00-\u9FFF]/.test(text)) {
+    return 'zh-CN';
+  }
+  
+  // 아랍어 감지
+  if (/[\u0600-\u06FF]/.test(text)) {
+    return 'ar-SA';
+  }
+  
+  // 기본값: 영어
+  return 'en-US';
+}

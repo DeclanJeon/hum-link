@@ -8,6 +8,7 @@ import { X, Mic, Video, Volume2, Settings, MessageSquare } from "lucide-react";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { Switch } from "@/components/ui/switch";
 import { useTranscriptionStore } from "@/stores/useTranscriptionStore";
+import { SUPPORTED_LANGUAGES, TRANSLATION_LANGUAGES } from '@/stores/useTranscriptionStore';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -166,37 +167,44 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
 
             {isTranscriptionEnabled && (
               <div className="space-y-3">
+                {/* 음성인식 언어 선택 */}
                 <div>
                   <Label htmlFor="speaking-language">My Speaking Language</Label>
                   <Select value={transcriptionLanguage} onValueChange={setTranscriptionLanguage}>
                     <SelectTrigger id="speaking-language">
                       <SelectValue placeholder="Select language..." />
                     </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="en-US">English (US)</SelectItem>
-                      <SelectItem value="ko-KR">한국어</SelectItem>
-                      <SelectItem value="ja-JP">日本語</SelectItem>
-                      <SelectItem value="zh-CN">中文 (简体)</SelectItem>
-                      <SelectItem value="es-ES">Español</SelectItem>
+                    <SelectContent className="max-h-[300px]">
+                      {SUPPORTED_LANGUAGES.map(lang => (
+                        <SelectItem key={lang.code} value={lang.code}>
+                          <span className="mr-2">{lang.flag}</span>
+                          {lang.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {transcriptionLanguage === 'auto'
+                      ? '자동으로 언어를 감지합니다'
+                      : '선택한 언어로 음성을 인식합니다'}
+                  </p>
                 </div>
               </div>
             )}
             
+            {/* 번역 언어 선택 */}
             <div>
               <Label htmlFor="translation-language">Translate Subtitles To</Label>
               <Select value={translationTargetLanguage} onValueChange={setTranslationTargetLanguage}>
                 <SelectTrigger id="translation-language">
                   <SelectValue placeholder="Select language..." />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Disabled</SelectItem>
-                  <SelectItem value="en">English</SelectItem>
-                  <SelectItem value="ko">Korean</SelectItem>
-                  <SelectItem value="ja">Japanese</SelectItem>
-                  <SelectItem value="zh">Chinese</SelectItem>
-                  <SelectItem value="es">Spanish</SelectItem>
+                <SelectContent className="max-h-[300px]">
+                  {TRANSLATION_LANGUAGES.map(lang => (
+                    <SelectItem key={lang.code} value={lang.code}>
+                      {lang.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
