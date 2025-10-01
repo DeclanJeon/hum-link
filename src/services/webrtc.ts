@@ -262,29 +262,66 @@ export class WebRTCManager {
   }
 
   /**
-   * 개선된 트랙 교체 메서드
+   * 모든 피어에 대해 트랙 교체 (동기적)
    */
-  public replaceTrack(oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack, stream: MediaStream): void {
-    this.peers.forEach((peer, peerId) => {
-      if (!peer.destroyed) {
+  public async replaceTrack(
+    oldTrack: MediaStreamTrack,
+    newTrack: MediaStreamTrack,
+    stream: MediaStream
+  ): Promise<void> {
+    const results: Array<{ peerId: string; success: boolean; error?: Error }> = [];
+    
+    // 모든 피어에 대해 순차적으로 트랙 교체
+    for (const [peerId, peer] of this.peers.entries()) {
+      if (peer.destroyed) {
+        console.warn(`[WebRTC] Peer ${peerId} is destroyed, skipping`);
+        continue;
+      }
+      
+      try {
+        // Simple-peer의 replaceTrack 메서드 사용
+        await peer.replaceTrack(oldTrack, newTrack, stream);
+        
+        console.log(`[WebRTC] Track replaced successfully for peer ${peerId}`);
+        results.push({ peerId, success: true });
+        
+      } catch (error) {
+        console.error(`[WebRTC] Failed to replace track for peer ${peerId}:`, error);
+        
+        // Fallback: removeTrack + addTrack
         try {
-          // Simple-peer의 replaceTrack 메서드 사용
-          peer.replaceTrack(oldTrack, newTrack, stream);
-          console.log(`[WebRTC] Track replaced for peer ${peerId}`);
-        } catch (error) {
-          console.error(`[WebRTC] Failed to replace track for peer ${peerId}:`, error);
+          await peer.removeTrack(oldTrack, stream);
+          await peer.addTrack(newTrack, stream);
           
-          // 폴백: 트랙 제거 후 추가
-          try {
-            peer.removeTrack(oldTrack, stream);
-            peer.addTrack(newTrack, stream);
-            console.log(`[WebRTC] Track replaced using fallback for peer ${peerId}`);
-          } catch (fallbackError) {
-            console.error(`[WebRTC] Fallback also failed for peer ${peerId}:`, fallbackError);
-          }
+          console.log(`[WebRTC] Track replaced using fallback for peer ${peerId}`);
+          results.push({ peerId, success: true });
+          
+        } catch (fallbackError) {
+          console.error(`[WebRTC] Fallback also failed for peer ${peerId}:`, fallbackError);
+          results.push({
+            peerId,
+            success: false,
+            error: fallbackError as Error
+          });
         }
       }
-    });
+    }
+    
+    // 결과 요약
+    const successful = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+    
+    console.log(
+      `[WebRTC] Track replacement complete: ${successful} succeeded, ${failed} failed`
+    );
+    
+    if (failed > 0) {
+      throw new Error(
+        `Track replacement failed for ${failed} peer(s): ${
+          results.filter(r => !r.success).map(r => r.peerId).join(', ')
+        }`
+      );
+    }
   }
 
   /**

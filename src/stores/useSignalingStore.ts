@@ -51,25 +51,62 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
     set({ status: 'connecting' });
     const socket = io(ENV.VITE_SIGNALING_SERVER_URL, {
       path: '/socket.io',
-      transports: ['websocket', 'polling']
+      transports: ['websocket', 'polling'],
+      // 재연결 설정 강화
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
     });
 
     socket.on('connect', () => {
       set({ status: 'connected' });
       events.onConnect();
-      console.log(`[SIGNALING_CORE] join-room 이벤트 전송: { roomId: ${roomId}, userId: ${userId} }`);
       socket.emit('join-room', { roomId, userId, nickname });
+      
+      // 🔥 하트비트 시작 (30초마다)
+      const heartbeatInterval = setInterval(() => {
+        if (socket.connected) {
+          socket.emit('heartbeat');
+        }
+      }, 30000);
+      
+      // 소켓에 interval ID 저장 (정리용)
+      (socket as any).heartbeatInterval = heartbeatInterval;
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       set({ status: 'disconnected' });
       events.onDisconnect();
+      
+      // 하트비트 정리
+      const interval = (socket as any).heartbeatInterval;
+      if (interval) {
+        clearInterval(interval);
+      }
+      
+      console.log(`[Signaling] 연결 해제: ${reason}`);
     });
 
-    // ✅ 추가: 연결 오류 리스너
+    // 에러 처리 강화
     socket.on('connect_error', (err) => {
-      console.error('[SIGNALING_CORE] ❌ 연결 오류:', err.message);
+      console.error('[Signaling] 연결 오류:', err.message);
       set({ status: 'error' });
+      
+      if (err.message === 'xhr poll error') {
+        toast.error('서버 연결 실패. 네트워크를 확인해주세요.');
+      }
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log(`[Signaling] 재연결 성공 (시도 ${attemptNumber}회)`);
+      toast.success('연결이 복구되었습니다.');
+    });
+
+    socket.on('reconnect_failed', () => {
+      console.error('[Signaling] 재연결 실패');
+      toast.error('서버 연결에 실패했습니다. 페이지를 새로고침해주세요.');
     });
 
     // ✅ 추가: 일반 소켓 오류 리스너
@@ -146,7 +183,16 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
   },
 
   disconnect: () => {
-    get().socket?.disconnect();
+    const socket = get().socket;
+    if (socket) {
+      // 하트비트 정리
+      const interval = (socket as any).heartbeatInterval;
+      if (interval) {
+        clearInterval(interval);
+      }
+      
+      socket.disconnect();
+    }
     set({ socket: null, status: 'disconnected' });
   },
 

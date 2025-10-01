@@ -45,10 +45,21 @@ export const VideoPreview = ({
   const shouldShowSubtitles = showSubtitles && subtitlesEnabled && !isLocalVideo;
 
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
+    if (videoRef.current && stream) {
+      // 스트림이 변경되면 즉시 반영
+      if (videoRef.current.srcObject !== stream) {
+        console.log('[VideoPreview] Stream changed, updating video element');
+        videoRef.current.srcObject = stream;
+        
+        // 비디오 재생 상태 복원
+        if (!isLocalVideo && videoRef.current.paused) {
+          videoRef.current.play().catch(err => {
+            console.warn('[VideoPreview] Auto-play failed:', err);
+          });
+        }
+      }
     }
-  }, [stream]);
+  }, [stream, isLocalVideo]);
 
   return (
     <div 
