@@ -22,7 +22,14 @@ export class CameraManager {
     return CameraManager.instance;
   }
 
-  public isMobileDevice(): boolean {
+  /**
+   * 현재 facing mode 설정 (외부에서 호출 가능)
+   */
+  public setCurrentFacing(facing: CameraFacing): void {
+    this.currentFacing = facing;
+  }
+
+ public isMobileDevice(): boolean {
     // 다양한 방법으로 모바일 감지
     const userAgent = navigator.userAgent.toLowerCase();
     const mobileKeywords = ['android', 'webos', 'iphone', 'ipad', 'ipod', 'blackberry', 'windows phone'];
@@ -69,81 +76,77 @@ export class CameraManager {
     }
   }
 
+  /**
+   * iOS/Safari 호환 카메라 전환
+   */
   public async switchCamera(currentStream: MediaStream | null): Promise<MediaStream | null> {
     if (!this.isMobileDevice()) {
-      toast.warning('Camera switching is only available on mobile devices');
+      toast.warning('카메라 전환은 모바일 기기에서만 가능합니다');
       return currentStream;
     }
 
     const newFacing: CameraFacing = this.currentFacing === 'user' ? 'environment' : 'user';
     
     try {
-      console.log(`[CameraManager] Switching from ${this.currentFacing} to ${newFacing}`);
-      
-      // 현재 오디오 트랙 백업
-      const audioTrack = currentStream?.getAudioTracks()[0];
-      
-      // 새 비디오 스트림 획득 (exact constraint)
+      // 🔑 iOS 호환: ideal constraint 사용
       const constraints: MediaStreamConstraints = {
         video: {
-          facingMode: { exact: newFacing },
+          facingMode: { ideal: newFacing },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
-        audio: false // 오디오는 별도로 추가
+        audio: false
       };
       
       let newStream: MediaStream;
       
       try {
         newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (exactError) {
-        console.warn('[CameraManager] Exact constraint failed, trying ideal...');
+      } catch (facingError) {
+        // Fallback: deviceId로 선택
+        console.warn('[CameraManager] facingMode failed, using deviceId');
         
-        // Fallback: ideal constraint
-        const fallbackConstraints: MediaStreamConstraints = {
-          video: {
-            facingMode: newFacing,
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cameras = devices.filter(d => d.kind === 'videoinput');
+        
+        if (cameras.length < 2) {
+          throw new Error('카메라가 1개만 감지되었습니다');
+        }
+        
+        // 현재 카메라 제외
+        const currentDeviceId = currentStream?.getVideoTracks()[0]?.getSettings().deviceId;
+        const nextCamera = cameras.find(cam => cam.deviceId !== currentDeviceId) || cameras[1];
+        
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: nextCamera.deviceId } },
           audio: false
-        };
-        
-        newStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+        });
       }
       
-      // 오디오 트랙 복원
+      // 오디오 트랙 보존
+      const audioTrack = currentStream?.getAudioTracks()[0];
       if (audioTrack && audioTrack.readyState === 'live') {
         newStream.addTrack(audioTrack.clone());
-        console.log('[CameraManager] Audio track restored to new stream');
       }
       
-      // 이전 비디오 트랙 정리 (오디오는 유지)
+      // 이전 비디오 트랙 정리
       currentStream?.getVideoTracks().forEach(track => {
         track.stop();
-        console.log(`[CameraManager] Stopped old video track: ${track.label}`);
       });
       
       this.currentFacing = newFacing;
       
-      console.log(`[CameraManager] Camera switched successfully to ${newFacing}`);
-      toast.success(`Switched to ${newFacing === 'user' ? 'front' : 'back'} camera`);
-      
       return newStream;
       
     } catch (error: any) {
-      console.error('[CameraManager] Failed to switch camera:', error);
+      console.error('[CameraManager] Switch failed:', error);
       
-      // 에러 메시지 개선
       if (error.name === 'NotFoundError') {
-        toast.error('Camera not found');
+        toast.error('카메라를 찾을 수 없습니다');
       } else if (error.name === 'NotAllowedError') {
-        toast.error('Camera permission denied');
-      } else if (error.name === 'OverconstrainedError') {
-        toast.error('Camera does not support requested constraints');
+        toast.error('카메라 권한이 거부되었습니다');
       } else {
-        toast.error('Failed to switch camera');
+        toast.error('카메라 전환 실패');
       }
       
       return currentStream;

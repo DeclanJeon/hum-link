@@ -21,6 +21,8 @@ import { StreamControls } from './StreamControls';
 import { MiniPlayer } from './MiniPlayer';
 import { useFileStreaming } from '@/hooks/useFileStreaming';
 import { cn } from '@/lib/utils';
+import { getDeviceInfo } from '@/lib/deviceDetector';
+import { getStrategyDescription } from '@/lib/streamingStrategy';
 
 interface FileStreamingPanelProps {
   isOpen: boolean;
@@ -34,6 +36,9 @@ export const FileStreamingPanel = ({ isOpen, onClose }: FileStreamingPanelProps)
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [isReturningToCamera, setIsReturningToCamera] = useState(false);
+  // 디바이스 정보 표시
+  const [deviceInfo, setDeviceInfo] = useState<string>('');
+
   
   const { peers, webRTCManager } = usePeerConnectionStore();
   const { localStream } = useMediaDeviceStore();
@@ -70,6 +75,15 @@ export const FileStreamingPanel = ({ isOpen, onClose }: FileStreamingPanelProps)
     streamQuality,
     fileType
   });
+
+  useEffect(() => {
+    const info = getDeviceInfo();
+    if (info.isIOS) {
+      setDeviceInfo(`iOS ${info.iosVersion || 'Unknown'} - ${info.optimalMimeType}`);
+    } else {
+      setDeviceInfo('Desktop/Android');
+    }
+  }, []);
   
   useEffect(() => {
     return () => {
@@ -302,6 +316,20 @@ export const FileStreamingPanel = ({ isOpen, onClose }: FileStreamingPanelProps)
                 >
                   Minimize
                 </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* iOS 정보 표시 */}
+          {deviceInfo.includes('iOS') && (
+            <Alert className="m-4 mb-0 bg-blue-50 dark:bg-blue-950 border-blue-200">
+              <AlertDescription className="flex items-center gap-2">
+                <span className="text-blue-600 dark:text-blue-400 font-medium">
+                  📱 {deviceInfo}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  - Optimized for iOS Safari
+                </span>
               </AlertDescription>
             </Alert>
           )}
