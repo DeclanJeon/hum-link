@@ -6,6 +6,7 @@ import {
   calculateActualChunkSize,
   calculateTransferSpeed
 } from '../lib/fileTransferUtils';
+import { getOptimalChunkSize } from '../lib/deviceDetector';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -52,7 +53,7 @@ const TRANSFER_CONFIGS = {
   }
 };
 
-const CHUNK_SIZE = 64 * 1024; // 64KB
+const CHUNK_SIZE = getOptimalChunkSize(); // iOS: 16KB, Others: 64KB
 const BUFFER_CHECK_INTERVAL = 100; // 버퍼 체크 간격
 
 class FlowControlFileWorker {

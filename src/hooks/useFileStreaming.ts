@@ -1,5 +1,5 @@
 /**
- * @fileoverview 파일 스트리밍 Hook - 원격 스트림 복원 수정
+ * @fileoverview 파일 스트리밍 Hook - iOS 호환 완전 지원
  * @module hooks/useFileStreaming
  */
 
@@ -9,6 +9,9 @@ import { StreamStateManager } from '@/services/streamStateManager';
 import { VideoLoader } from '@/services/videoLoader';
 import { RecoveryManager } from '@/services/recoveryManager';
 import { useMediaDeviceStore } from '@/stores/useMediaDeviceStore';
+import { AdaptiveStreamManager } from '@/services/adaptiveStreamManager';
+import { getDeviceInfo, isIOS } from '@/lib/deviceDetector';
+import { getStrategyDescription } from '@/lib/streamingStrategy';
 
 interface UseFileStreamingProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -34,6 +37,10 @@ interface DebugInfo {
   frameDrops: number;
   audioEnabled: boolean;
   errors: string[];
+  // iOS 관련 추가 정보
+  isIOS: boolean;
+  streamingStrategy: string;
+  deviceInfo: string;
 }
 
 interface OriginalTrackState {
@@ -62,8 +69,6 @@ export const useFileStreaming = ({
   const frameCountRef = useRef<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
   const animationFrameRef = useRef<number | null>(null);
-  
-  // 원본 트랙 저장용 Ref 추가
   const originalTracksRef = useRef<OriginalTrackState>({
     video: null,
     audio: null,
@@ -75,10 +80,12 @@ export const useFileStreaming = ({
   const streamStateManager = useRef(new StreamStateManager());
   const videoLoader = useRef(new VideoLoader());
   const recoveryManager = useRef(new RecoveryManager());
+  const adaptiveStreamManager = useRef(new AdaptiveStreamManager());
   
   const recoveryAttemptRef = useRef<boolean>(false);
+  const streamCleanupRef = useRef<(() => void) | null>(null);
   
-  // MediaDeviceStore 접근
+  // MediaDeviceStore
   const { 
     saveOriginalMediaState, 
     restoreOriginalMediaState, 
@@ -105,10 +112,34 @@ export const useFileStreaming = ({
     fps: 0,
     frameDrops: 0,
     audioEnabled: false,
-    errors: []
+    errors: [],
+    isIOS: isIOS(),
+    streamingStrategy: 'unknown',
+    deviceInfo: ''
   });
   
-  // FPS 모니터링
+  // 디바이스 정보 초기화
+  useEffect(() => {
+    const deviceInfo = getDeviceInfo();
+    const strategyInfo = adaptiveStreamManager.current.getInfo();
+    
+    setDebugInfo(prev => ({
+      ...prev,
+      isIOS: deviceInfo.isIOS,
+      deviceInfo: JSON.stringify(deviceInfo, null, 2),
+      streamingStrategy: strategyInfo.strategy.strategy
+    }));
+    
+    console.log('[FileStreaming] Device Info:', deviceInfo);
+    console.log('[FileStreaming] Strategy:', getStrategyDescription(strategyInfo.strategy));
+    
+    // iOS 사용자에게 안내
+    if (deviceInfo.isIOS) {
+      toast.info('iOS device detected - Using optimized streaming', { duration: 3000 });
+    }
+  }, []);
+  
+  // FPS 계산
   useEffect(() => {
     const interval = setInterval(() => {
       const now = performance.now();
@@ -145,52 +176,8 @@ export const useFileStreaming = ({
     }
   }, []);
 
-  // Canvas fallback 스트림 생성
-  const createCanvasStreamFromVideo = async (
-    video: HTMLVideoElement,
-    fps: number
-  ): Promise<MediaStream | null> => {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
-    if (!ctx) {
-      throw new Error('Failed to get canvas context');
-    }
-    
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    
-    const stream = (canvas as any).captureStream(fps);
-    
-    const drawFrame = () => {
-      if (video.paused || video.ended) {
-        if (animationFrameRef.current) {
-          cancelAnimationFrame(animationFrameRef.current);
-          animationFrameRef.current = null;
-        }
-        return;
-      }
-      
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      frameCountRef.current++;
-      animationFrameRef.current = requestAnimationFrame(drawFrame);
-    };
-    
-    video.addEventListener('play', drawFrame);
-    video.addEventListener('pause', () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-    });
-    
-    drawFrame();
-    
-    return stream;
-  };
-
   /**
-   * 파일 선택 처리
+   * 파일 선택 핸들러
    */
   const handleFileSelect = async (
     file: File,
@@ -246,7 +233,7 @@ export const useFileStreaming = ({
   };
 
   /**
-   * 비디오 로드 (복구 로직 포함)
+   * 비디오 로딩 (복구 기능 포함)
    */
   const loadVideoWithRecovery = async (file: File) => {
     if (!videoRef?.current) {
@@ -369,6 +356,9 @@ export const useFileStreaming = ({
     }
   };
 
+  /**
+   * 스트리밍 시작 (iOS 최적화)
+   */
   const startStreaming = useCallback(async (file: File) => {
     if (!webRTCManager) {
       toast.error('WebRTC Manager not initialized');
@@ -376,12 +366,12 @@ export const useFileStreaming = ({
     }
     
     try {
-      console.log('[FileStreaming] Starting streaming...');
+      console.log('[FileStreaming] Starting streaming with adaptive strategy...');
       
-      // 1. 현재 미디어 상태 저장
+      // 1. 원본 상태 저장
       saveOriginalMediaState();
       
-      // 2. 현재 트랙 저장 (중요!)
+      // 2. 원본 트랙 저장
       if (localStream) {
         const videoTrack = localStream.getVideoTracks()[0];
         const audioTrack = localStream.getAudioTracks()[0];
@@ -401,7 +391,7 @@ export const useFileStreaming = ({
         });
       }
       
-      // 3. StreamStateManager로도 백업
+      // 3. StreamStateManager 저장
       const mediaDeviceState = useMediaDeviceStore.getState();
       streamStateManager.current.captureState(localStream, {
         isAudioEnabled: mediaDeviceState.isAudioEnabled,
@@ -409,20 +399,18 @@ export const useFileStreaming = ({
         isSharingScreen: mediaDeviceState.isSharingScreen
       });
       
-      // 4. 파일 스트리밍 상태 설정
+      // 4. 파일 스트리밍 플래그 설정
       setFileStreaming(true);
       
-      console.log('[FileStreaming] Original state saved, preparing stream...');
+      console.log('[FileStreaming] Original state saved, preparing adaptive stream...');
       
-      let captureStream: MediaStream | null = null;
-      
+      // 5. 적응형 스트림 생성
       if (fileType === 'video' && videoRef.current) {
         const video = videoRef.current;
         
-        console.log('[FileStreaming] Waiting for video to be ready...');
-        
+        // 비디오 준비 대기
         if (video.readyState < 3) {
-          console.log('[FileStreaming] Video not ready, waiting... (readyState:', video.readyState, ')');
+          console.log('[FileStreaming] Waiting for video to be ready...');
           
           await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -448,37 +436,38 @@ export const useFileStreaming = ({
           });
         }
         
-        console.log('[FileStreaming] Video is ready (readyState:', video.readyState, ')');
+        console.log('[FileStreaming] Video is ready, creating adaptive stream...');
         
-        const fpsSettings = {
-          low: 15,
-          medium: 24,
-          high: 30
-        };
-        const fps = fpsSettings[streamQuality];
-        
-        try {
-          if ('captureStream' in video) {
-            captureStream = (video as any).captureStream(fps);
-            console.log('[FileStreaming] Using captureStream');
-          } else if ('mozCaptureStream' in video) {
-            captureStream = (video as any).mozCaptureStream(fps);
-            console.log('[FileStreaming] Using mozCaptureStream');
-          } else {
-            console.warn('[FileStreaming] captureStream not supported, using canvas fallback');
-            captureStream = await createCanvasStreamFromVideo(video, fps);
+        // AdaptiveStreamManager를 사용하여 스트림 생성
+        const result = await adaptiveStreamManager.current.createStream(
+          video,
+          // MediaRecorder 전략인 경우 청크 핸들러
+          (blob, timestamp) => {
+            // Blob을 ArrayBuffer로 변환하여 DataChannel로 전송
+            blob.arrayBuffer().then(buffer => {
+              const { sendToAllPeers } = webRTCManager;
+              sendToAllPeers(buffer);
+            });
           }
-        } catch (error) {
-          console.error('[FileStreaming] Failed to create capture stream:', error);
-          throw new Error(`Failed to capture video stream: ${error}`);
-        }
+        );
         
-        if (!captureStream) {
-          throw new Error('Failed to create capture stream');
-        }
+        streamCleanupRef.current = result.cleanup;
+        fileStreamRef.current = result.stream;
+        streamRef.current = result.stream;
         
-        console.log(`[FileStreaming] Video capture stream created with ${fps} fps`);
+        console.log(`[FileStreaming] Stream created with strategy: ${result.strategy}`);
+        console.log(`[FileStreaming] Config:`, result.config);
         
+        updateDebugInfo({
+          streamCreated: true,
+          trackCount: result.stream.getTracks().length,
+          streamActive: result.stream.getTracks().some(t => t.readyState === 'live'),
+          peersConnected: peers.size,
+          streamingStrategy: result.strategy,
+          fps: result.config.fps
+        });
+        
+        // 비디오 재생 시작
         if (video.paused) {
           try {
             await video.play();
@@ -490,54 +479,38 @@ export const useFileStreaming = ({
           }
         }
         
-      } else if (canvasRef.current) {
-        const fps = streamQuality === 'high' ? 30 : streamQuality === 'medium' ? 24 : 15;
-        
-        if ('captureStream' in canvasRef.current) {
-          captureStream = (canvasRef.current as any).captureStream(fps);
-        } else if ('mozCaptureStream' in canvasRef.current) {
-          captureStream = (canvasRef.current as any).mozCaptureStream(fps);
-        } else {
-          throw new Error('Canvas captureStream is not supported in this browser');
+        // WebRTC 트랙 교체 (MediaRecorder가 아닌 경우만)
+        if (result.strategy !== 'mediarecorder') {
+          await replaceStreamTracksForFileStreaming(result.stream);
         }
         
-        console.log(`[FileStreaming] Canvas capture stream created with ${fps} fps`);
+      } else if (canvasRef.current) {
+        // Canvas 기반 (PDF, 이미지 등)
+        const result = await adaptiveStreamManager.current.createStream(
+          document.createElement('video') // 더미 비디오
+        );
+        
+        streamCleanupRef.current = result.cleanup;
+        fileStreamRef.current = result.stream;
+        streamRef.current = result.stream;
+        
+        await replaceStreamTracksForFileStreaming(result.stream);
       }
-      
-      if (!captureStream) {
-        throw new Error('Failed to create capture stream');
-      }
-      
-      const tracks = captureStream.getTracks();
-      if (tracks.length === 0) {
-        throw new Error('Capture stream has no tracks');
-      }
-      
-      fileStreamRef.current = captureStream;
-      streamRef.current = captureStream;
-      
-      updateDebugInfo({
-        streamCreated: true,
-        trackCount: tracks.length,
-        streamActive: tracks.some(t => t.readyState === 'live'),
-        peersConnected: peers.size,
-        audioEnabled: tracks.some(t => t.kind === 'audio')
-      });
-      
-      console.log(`[FileStreaming] Stream has ${tracks.length} tracks:`,
-        tracks.map(t => `${t.kind}:${t.readyState}`).join(', '));
-      
-      // WebRTC 트랙 교체
-      await replaceStreamTracksForFileStreaming(captureStream);
       
       setIsStreaming(true);
-      toast.success('Started file streaming');
+      
+      // iOS 사용자에게 피드백
+      if (isIOS()) {
+        toast.success('File streaming started (iOS optimized)', { duration: 3000 });
+      } else {
+        toast.success('Started file streaming');
+      }
       
     } catch (error) {
       logError(`Failed to start streaming: ${error}`);
       toast.error(`Streaming failed: ${error}`);
       
-      // 실패 시 원래 상태로 복원
+      // 실패 시 원본 상태 복구
       await restoreOriginalMediaState();
       setFileStreaming(false);
       
@@ -557,9 +530,11 @@ export const useFileStreaming = ({
         }
       }
     }
-  }, [fileType, streamQuality, webRTCManager, localStream, peers, setIsStreaming, updateDebugInfo, setVideoState, createCanvasStreamFromVideo, saveOriginalMediaState, restoreOriginalMediaState, setFileStreaming]);
+  }, [fileType, streamQuality, webRTCManager, localStream, peers, setIsStreaming, updateDebugInfo, setVideoState, saveOriginalMediaState, restoreOriginalMediaState, setFileStreaming]);
 
-  // 파일 스트리밍용 트랙 교체 함수
+  /**
+   * 파일 스트리밍용 트랙 교체
+   */
   const replaceStreamTracksForFileStreaming = async (newStream: MediaStream) => {
     if (!localStream || !webRTCManager) return;
     
@@ -570,12 +545,9 @@ export const useFileStreaming = ({
       const originalVideoTrack = localStream.getVideoTracks()[0];
       
       if (originalVideoTrack) {
-        // WebRTC에서 트랙 교체
         webRTCManager.replaceTrack(originalVideoTrack, newVideoTrack, localStream);
-        // 로컬 스트림에서도 교체
         localStream.removeTrack(originalVideoTrack);
         localStream.addTrack(newVideoTrack);
-        // 원본 트랙은 stop하지 않음 (나중에 복원해야 함)
       } else {
         localStream.addTrack(newVideoTrack);
         webRTCManager.addTrackToAllPeers(newVideoTrack, localStream);
@@ -589,12 +561,9 @@ export const useFileStreaming = ({
       const originalAudioTrack = localStream.getAudioTracks()[0];
       
       if (originalAudioTrack) {
-        // WebRTC에서 트랙 교체
         webRTCManager.replaceTrack(originalAudioTrack, newAudioTrack, localStream);
-        // 로컬 스트림에서도 교체
         localStream.removeTrack(originalAudioTrack);
         localStream.addTrack(newAudioTrack);
-        // 원본 트랙은 stop하지 않음
       } else {
         localStream.addTrack(newAudioTrack);
         webRTCManager.addTrackToAllPeers(newAudioTrack, localStream);
@@ -605,7 +574,9 @@ export const useFileStreaming = ({
     }
   };
 
-  // 원래 카메라 트랙으로 복원하는 함수
+  /**
+   * 원본 트랙 복구
+   */
   const restoreOriginalTracks = async () => {
     if (!localStream || !webRTCManager) {
       console.error('[FileStreaming] Cannot restore tracks: no stream or WebRTC manager');
@@ -622,45 +593,28 @@ export const useFileStreaming = ({
     console.log('[FileStreaming] Restoring original tracks...');
     
     try {
-      // 현재 파일 스트림 트랙 가져오기
       const currentVideoTrack = localStream.getVideoTracks()[0];
       const currentAudioTrack = localStream.getAudioTracks()[0];
       
-      // 비디오 트랙 복원
       if (originalState.video && currentVideoTrack) {
         console.log('[FileStreaming] Replacing file video track with original camera track');
         
-        // WebRTC 피어 연결에서 트랙 교체
         webRTCManager.replaceTrack(currentVideoTrack, originalState.video, localStream);
-        
-        // 로컬 스트림에서 트랙 교체
         localStream.removeTrack(currentVideoTrack);
         localStream.addTrack(originalState.video);
-        
-        // 원래 enabled 상태 복원
         originalState.video.enabled = originalState.videoEnabled;
-        
-        // 파일 스트림 트랙 정지
         currentVideoTrack.stop();
         
         console.log(`[FileStreaming] Video track restored, enabled: ${originalState.videoEnabled}`);
       }
       
-      // 오디오 트랙 복원
       if (originalState.audio && currentAudioTrack) {
         console.log('[FileStreaming] Replacing file audio track with original audio track');
         
-        // WebRTC 피어 연결에서 트랙 교체
         webRTCManager.replaceTrack(currentAudioTrack, originalState.audio, localStream);
-        
-        // 로컬 스트림에서 트랙 교체
         localStream.removeTrack(currentAudioTrack);
         localStream.addTrack(originalState.audio);
-        
-        // 원래 enabled 상태 복원
         originalState.audio.enabled = originalState.audioEnabled;
-        
-        // 파일 스트림 트랙 정지
         currentAudioTrack.stop();
         
         console.log(`[FileStreaming] Audio track restored, enabled: ${originalState.audioEnabled}`);
@@ -673,24 +627,35 @@ export const useFileStreaming = ({
     }
   };
 
+  /**
+   * 스트리밍 중지
+   */
   const stopStreaming = useCallback(async () => {
     console.log('[FileStreaming] Stopping stream...');
     
     try {
-      // 1. 비디오 정지
+      // 1. 비디오 일시정지
       if (videoRef.current && fileType === 'video') {
         videoRef.current.pause();
         videoRef.current.currentTime = 0;
         setVideoState(prev => ({ ...prev, isPaused: true, currentTime: 0 }));
       }
       
-      // 2. 애니메이션 프레임 정리
+      // 2. 애니메이션 중지
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
       }
       
-      // 3. 원래 트랙으로 복원 (중요! 이것을 먼저 해야 함)
+      // 3. AdaptiveStreamManager 정리
+      if (streamCleanupRef.current) {
+        streamCleanupRef.current();
+        streamCleanupRef.current = null;
+      }
+      
+      adaptiveStreamManager.current.cleanup();
+      
+      // 4. 원본 트랙 복구
       console.log('[FileStreaming] Restoring original camera/audio tracks...');
       const tracksRestored = await restoreOriginalTracks();
       
@@ -701,9 +666,8 @@ export const useFileStreaming = ({
         console.log('[FileStreaming] Original tracks restored successfully');
       }
       
-      // 4. 파일 스트림 정리 (트랙은 이미 restoreOriginalTracks에서 stop됨)
+      // 5. 파일 스트림 정리
       if (fileStreamRef.current) {
-        // 남은 트랙이 있다면 정지
         fileStreamRef.current.getTracks().forEach(track => {
           if (track.readyState === 'live') {
             track.stop();
@@ -712,7 +676,7 @@ export const useFileStreaming = ({
         fileStreamRef.current = null;
       }
       
-      // 5. 기타 스트림 정리
+      // 6. 스트림 정리
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => {
           if (track.readyState === 'live') {
@@ -722,7 +686,7 @@ export const useFileStreaming = ({
         streamRef.current = null;
       }
       
-      // 6. MediaDeviceStore 상태 복원
+      // 7. MediaDeviceStore 복구
       console.log('[FileStreaming] Restoring MediaDeviceStore state...');
       const storeRestored = await restoreOriginalMediaState();
       
@@ -732,11 +696,11 @@ export const useFileStreaming = ({
         console.log('[FileStreaming] MediaDeviceStore state restored successfully');
       }
       
-      // 7. 파일 스트리밍 상태 해제
+      // 8. 파일 스트리밍 플래그 해제
       setFileStreaming(false);
       setIsStreaming(false);
       
-      // 8. 원본 트랙 참조 초기화
+      // 9. 원본 트랙 상태 초기화
       originalTracksRef.current = {
         video: null,
         audio: null,
@@ -757,25 +721,31 @@ export const useFileStreaming = ({
       logError(`Error during stop streaming: ${error}`);
       toast.error('Error stopping stream. Please refresh the page.');
       
-      // 오류 발생 시에도 상태는 복원 시도
       setFileStreaming(false);
       setIsStreaming(false);
     }
   }, [fileType, setIsStreaming, updateDebugInfo, setVideoState, restoreOriginalMediaState, setFileStreaming, webRTCManager, localStream]);
 
+  /**
+   * 리소스 정리
+   */
   const cleanupResources = useCallback(() => {
     console.log('[FileStreaming] Cleaning up resources...');
     
-    // 애니메이션 프레임 정리
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
     
-    // Object URL 정리
     cleanupObjectUrl();
     
-    // 스트림 정리
+    if (streamCleanupRef.current) {
+      streamCleanupRef.current();
+      streamCleanupRef.current = null;
+    }
+    
+    adaptiveStreamManager.current.cleanup();
+    
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
         track.stop();
@@ -792,7 +762,6 @@ export const useFileStreaming = ({
       fileStreamRef.current = null;
     }
     
-    // 비디오 엘리먼트 정리
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.removeAttribute('src');
@@ -800,7 +769,6 @@ export const useFileStreaming = ({
       console.log('[FileStreaming] Video element cleaned');
     }
     
-    // Canvas 정리
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d');
       if (ctx) {
@@ -808,7 +776,6 @@ export const useFileStreaming = ({
       }
     }
     
-    // 상태 초기화
     videoLoadedRef.current = false;
     frameCountRef.current = 0;
     streamStateManager.current.reset();

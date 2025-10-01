@@ -1,6 +1,5 @@
-// src/components/FileStreaming/DebugPanel.tsx
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, XCircle, Smartphone } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 interface DebugInfo {
@@ -15,6 +14,10 @@ interface DebugInfo {
   frameDrops: number;
   audioEnabled: boolean;
   errors: string[];
+  // iOS 관련
+  isIOS: boolean;
+  streamingStrategy: string;
+  deviceInfo: string;
 }
 
 interface DebugPanelProps {
@@ -41,6 +44,19 @@ export const DebugPanel = ({ debugInfo }: DebugPanelProps) => {
       <AlertCircle className="h-4 w-4" />
       <AlertDescription>
         <div className="space-y-3">
+          {/* iOS 정보 */}
+          {debugInfo.isIOS && (
+            <div className="flex items-center gap-2 p-2 bg-blue-50 dark:bg-blue-950 rounded">
+              <Smartphone className="w-4 h-4 text-blue-500" />
+              <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                iOS Device Detected
+              </span>
+              <Badge variant="outline" className="text-xs">
+                Strategy: {debugInfo.streamingStrategy}
+              </Badge>
+            </div>
+          )}
+          
           {/* Stream Status Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
             <div className="flex items-center gap-2">
@@ -70,6 +86,7 @@ export const DebugPanel = ({ debugInfo }: DebugPanelProps) => {
               debugInfo.fps > 20 ? 'success' : debugInfo.fps > 10 ? 'warning' : 'error')}
             {getStatusBadge('Drops', debugInfo.frameDrops, 
               debugInfo.frameDrops > 100 ? 'error' : 'default')}
+            {debugInfo.isIOS && getStatusBadge('iOS', 'Optimized', 'success')}
           </div>
           
           {/* Video State */}
@@ -84,6 +101,13 @@ export const DebugPanel = ({ debugInfo }: DebugPanelProps) => {
               </span>
             </div>
           </div>
+          
+          {/* Strategy Info */}
+          {debugInfo.streamingStrategy && (
+            <div className="text-xs">
+              <span className="font-semibold">Strategy:</span> {debugInfo.streamingStrategy}
+            </div>
+          )}
           
           {/* Recent Errors */}
           {debugInfo.errors.length > 0 && (

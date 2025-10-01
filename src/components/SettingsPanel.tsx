@@ -9,6 +9,7 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { Switch } from "@/components/ui/switch";
 import { useTranscriptionStore } from "@/stores/useTranscriptionStore";
 import { SUPPORTED_LANGUAGES, TRANSLATION_LANGUAGES } from '@/stores/useTranscriptionStore';
+import { useLobbyStore } from '@/stores/useLobbyStore';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -46,6 +47,84 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
     }
   }, [isOpen, initializeDevices]);
 
+  // DeviceSelector에 onChange 핸들러 추가
+  const handleAudioDeviceChange = async (deviceId: string) => {
+    setSelectedAudioDevice(deviceId);
+    
+    // Lobby에서 사용 중이면 실시간 적용
+    const { stream, setSelectedAudioDevice: lobbySetAudio } = useLobbyStore.getState();
+    if (stream) {
+      // toast를 전달하지 않기 위해 직접 스트림 변경
+      if (stream) {
+        try {
+          // 새 오디오 스트림 생성
+          const newAudioStream = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { exact: deviceId } }
+          });
+          
+          const newAudioTrack = newAudioStream.getAudioTracks()[0];
+          
+          if (newAudioTrack) {
+            // 기존 오디오 트랙 교체
+            const oldAudioTrack = stream.getAudioTracks()[0];
+            if (oldAudioTrack) {
+              stream.removeTrack(oldAudioTrack);
+              oldAudioTrack.stop();
+            }
+            
+            stream.addTrack(newAudioTrack);
+            
+            // 오디오 분석 재초기화
+            const { initializeAudioAnalysis } = useLobbyStore.getState();
+            initializeAudioAnalysis(stream);
+          }
+        } catch (error) {
+          console.error('[SettingsPanel] Failed to change audio device:', error);
+        }
+      }
+    }
+  };
+
+  const handleVideoDeviceChange = async (deviceId: string) => {
+    setSelectedVideoDevice(deviceId);
+    
+    // Lobby에서 사용 중이면 실시간 적용
+    const { stream, setSelectedVideoDevice: lobbySetVideo } = useLobbyStore.getState();
+    if (stream) {
+      // toast를 전달하지 않기 위해 직접 스트림 변경
+      if (stream) {
+        try {
+          // 새 비디오 스트림 생성
+          const newVideoStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              deviceId: { exact: deviceId },
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            }
+          });
+          
+          const newVideoTrack = newVideoStream.getVideoTracks()[0];
+          
+          if (newVideoTrack) {
+            // 기존 비디오 트랙 교체
+            const oldVideoTrack = stream.getVideoTracks()[0];
+            if (oldVideoTrack) {
+              const wasEnabled = oldVideoTrack.enabled;
+              
+              stream.removeTrack(oldVideoTrack);
+              oldVideoTrack.stop();
+              
+              stream.addTrack(newVideoTrack);
+              newVideoTrack.enabled = wasEnabled;
+            }
+          }
+        } catch (error) {
+          console.error('[SettingsPanel] Failed to change video device:', error);
+        }
+      }
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -72,7 +151,7 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
             <div className="space-y-3">
               <div>
                 <Label htmlFor="microphone-select">Microphone</Label>
-                <Select value={selectedAudioDevice} onValueChange={setSelectedAudioDevice}>
+                <Select value={selectedAudioDevice} onValueChange={handleAudioDeviceChange}>
                   <SelectTrigger id="microphone-select">
                     <SelectValue placeholder="Select microphone" />
                   </SelectTrigger>
@@ -129,7 +208,7 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
             
             <div>
               <Label htmlFor="camera-select">Camera</Label>
-              <Select value={selectedVideoDevice} onValueChange={setSelectedVideoDevice}>
+              <Select value={selectedVideoDevice} onValueChange={handleVideoDeviceChange}>
                 <SelectTrigger id="camera-select">
                   <SelectValue placeholder="Select camera" />
                 </SelectTrigger>

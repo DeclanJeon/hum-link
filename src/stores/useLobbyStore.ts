@@ -32,8 +32,8 @@ interface LobbyActions {
   initializeAudioAnalysis: (stream: MediaStream) => void;
   toggleAudio: () => void;
   toggleVideo: (toast: any) => Promise<void>;
-  setSelectedAudioDevice: (deviceId: string) => void;
-  setSelectedVideoDevice: (deviceId: string) => void;
+  setSelectedAudioDevice: (deviceId: string, toast: any) => Promise<void>;
+  setSelectedVideoDevice: (deviceId: string, toast: any) => Promise<void>;
   setAudioLevel: (level: number) => void;
   cleanup: () => void;
 }
@@ -67,96 +67,97 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     await get().initializeMedia(toast);
   },
 
+  /**
+   * 디바이스 초기화 및 선택
+   */
   initializeMedia: async (toast: any) => {
     try {
-      // 먼저 디바이스 능력 감지
+      // 디바이스 capability 감지
       const capabilities = await mediaCapabilityDetector.detectCapabilities();
       set({ mediaCapabilities: capabilities });
 
-      // 선호 설정 (localStorage에서 가져오기)
+      // 저장된 디바이스 ID 로드 (localStorage)
       const preferredAudioDevice = localStorage.getItem("preferredAudioDevice");
       const preferredVideoDevice = localStorage.getItem("preferredVideoDevice");
 
-      // 제약 조건 생성
+      // 🔑 핵심: 유효한 디바이스만 필터링
+      const validAudioDevices = capabilities.microphones.filter(
+        d => d.deviceId && d.deviceId !== "" && d.deviceId !== "default"
+      );
+      const validVideoDevices = capabilities.cameras.filter(
+        d => d.deviceId && d.deviceId !== "" && d.deviceId !== "default"
+      );
+
+      // 초기 디바이스 선택 로직
+      let selectedAudioId = preferredAudioDevice;
+      let selectedVideoId = preferredVideoDevice;
+
+      // 저장된 디바이스가 없거나 유효하지 않으면 첫 번째 선택
+      if (!selectedAudioId || !validAudioDevices.find(d => d.deviceId === selectedAudioId)) {
+        selectedAudioId = validAudioDevices[0]?.deviceId || "";
+      }
+      
+      if (!selectedVideoId || !validVideoDevices.find(d => d.deviceId === selectedVideoId)) {
+        selectedVideoId = validVideoDevices[0]?.deviceId || "";
+      }
+
+      // Constraints 생성
       const constraints: MediaStreamConstraints = {
-        audio: preferredAudioDevice ? 
-          { deviceId: { exact: preferredAudioDevice } } : 
+        audio: selectedAudioId ?
+          { deviceId: { exact: selectedAudioId } } :
           true,
-        video: preferredVideoDevice ? 
-          { deviceId: { exact: preferredVideoDevice } } : 
+        video: selectedVideoId ?
+          {
+            deviceId: { exact: selectedVideoId },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          } :
           { width: { ideal: 1280 }, height: { ideal: 720 } }
       };
 
-      // 능력에 따른 스트림 생성
+      // 스트림 획득
       const result = await mediaCapabilityDetector.getConstrainedStream(constraints, true);
       
-      set({ 
+      set({
         stream: result.stream,
         isDummyStream: result.isDummy,
         streamWarnings: result.warnings,
-        audioDevices: result.capabilities.microphones,
-        videoDevices: result.capabilities.cameras
+        audioDevices: validAudioDevices,
+        videoDevices: validVideoDevices,
+        selectedAudioDevice: selectedAudioId,
+        selectedVideoDevice: selectedVideoId
       });
 
-      // 실제 디바이스가 있는 경우 선택된 디바이스 설정
-      // if (result.capabilities.microphones.length > 0 && !get().selectedAudioDevice) {
-      //   set({ selectedAudioDevice: result.capabilities.microphones[0].deviceId });
-      // }
-      // if (result.capabilities.cameras.length > 0 && !get().selectedVideoDevice) {
-      //   set({ selectedVideoDevice: result.capabilities.cameras[0].deviceId });
-      // }
-
-          // 실제 디바이스가 있는 경우 선택된 디바이스 설정
-      if (result.capabilities.microphones.length > 0) {
-        // deviceId가 빈 문자열이 아닌지 확인!
-        const validMic = result.capabilities.microphones.find(
-          mic => mic.deviceId && mic.deviceId !== ""
-        );
-        if (validMic) {
-          set({ selectedAudioDevice: validMic.deviceId });
-        }
-      }
-      
-      if (result.capabilities.cameras.length > 0) {
-        // 카메라도 동일하게 처리
-        const validCam = result.capabilities.cameras.find(
-          cam => cam.deviceId && cam.deviceId !== ""
-        );
-        if (validCam) {
-          set({ selectedVideoDevice: validCam.deviceId });
-        }
-      }
-
-      // 오디오 분석 초기화 (마이크가 있는 경우만)
+      // 오디오 분석 초기화
       if (result.capabilities.hasMicrophone && get().isAudioEnabled) {
         get().initializeAudioAnalysis(result.stream);
       }
 
-      // 상태에 따른 메시지
+      // 사용자 피드백
       if (result.isDummy) {
-        toast.info("No camera or microphone detected. You can still join and receive streams.");
+        toast.info("카메라 또는 마이크가 감지되지 않았습니다. 수신 전용 모드로 참여할 수 있습니다.");
       } else if (result.warnings.length > 0) {
-        toast.warning(`Limited access: ${result.warnings.join(', ')}`);
+        toast.warning(`제한된 접근: ${result.warnings.join(', ')}`);
       } else {
-        toast.success("Camera and microphone ready!");
+        toast.success("카메라와 마이크가 준비되었습니다!");
       }
       
     } catch (error) {
       console.error("Media initialization error:", error);
       
-      // 완전 실패 시 더미 스트림 생성
+      // Fallback: Dummy stream
       const dummyResult = await mediaCapabilityDetector.getConstrainedStream(
         { audio: true, video: true },
         false
       );
       
-      set({ 
+      set({
         stream: dummyResult.stream,
         isDummyStream: true,
-        streamWarnings: ['Failed to access media devices']
+        streamWarnings: ['미디어 디바이스에 접근할 수 없습니다']
       });
       
-      toast.error("Could not access media devices. You can still join in receive-only mode.");
+      toast.error("미디어 디바이스에 접근할 수 없습니다. 수신 전용 모드로 참여합니다.");
     }
   },
 
@@ -217,14 +218,100 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     stream?.getVideoTracks().forEach(track => { track.enabled = newVideoState; });
   },
 
-  setSelectedAudioDevice: (deviceId: string) => {
-    set({ selectedAudioDevice: deviceId });
-    localStorage.setItem("preferredAudioDevice", deviceId);
+   /**
+    * 오디오 디바이스 변경
+    */
+   setSelectedAudioDevice: async (deviceId: string, toast: any) => {
+     const { stream, audioDevices } = get();
+     
+     // 유효성 검사
+     const device = audioDevices.find(d => d.deviceId === deviceId);
+     if (!device) {
+       console.error('[Lobby] Invalid audio device:', deviceId);
+       return;
+     }
+     
+     try {
+       // 새 오디오 스트림 생성
+       const newAudioStream = await navigator.mediaDevices.getUserMedia({
+         audio: { deviceId: { exact: deviceId } }
+       });
+       
+       const newAudioTrack = newAudioStream.getAudioTracks()[0];
+       
+       if (stream) {
+         // 기존 오디오 트랙 교체
+         const oldAudioTrack = stream.getAudioTracks()[0];
+         if (oldAudioTrack) {
+           stream.removeTrack(oldAudioTrack);
+           oldAudioTrack.stop();
+         }
+         
+         stream.addTrack(newAudioTrack);
+         
+         // 오디오 분석 재초기화
+         get().initializeAudioAnalysis(stream);
+       }
+       
+       set({ selectedAudioDevice: deviceId });
+       localStorage.setItem("preferredAudioDevice", deviceId);
+       
+       toast.success(`마이크 변경: ${device.label}`);
+       
+     } catch (error) {
+       console.error('[Lobby] Failed to change audio device:', error);
+       toast.error('마이크 변경 실패');
+     }
   },
-  
-  setSelectedVideoDevice: (deviceId: string) => {
-    set({ selectedVideoDevice: deviceId });
-    localStorage.setItem("preferredVideoDevice", deviceId);
+   
+   /**
+    * 비디오 디바이스 변경
+    */
+   setSelectedVideoDevice: async (deviceId: string, toast: any) => {
+     const { stream, videoDevices } = get();
+     
+     // 유효성 검사
+     const device = videoDevices.find(d => d.deviceId === deviceId);
+     if (!device) {
+       console.error('[Lobby] Invalid video device:', deviceId);
+       return;
+     }
+     
+     try {
+       // 새 비디오 스트림 생성
+       const newVideoStream = await navigator.mediaDevices.getUserMedia({
+         video: {
+           deviceId: { exact: deviceId },
+           width: { ideal: 1280 },
+           height: { ideal: 720 }
+         }
+       });
+       
+       const newVideoTrack = newVideoStream.getVideoTracks()[0];
+       
+       if (stream) {
+         // 기존 비디오 트랙 교체
+         const oldVideoTrack = stream.getVideoTracks()[0];
+         if (oldVideoTrack) {
+           const wasEnabled = oldVideoTrack.enabled;
+           
+           stream.removeTrack(oldVideoTrack);
+           oldVideoTrack.stop();
+           
+           stream.addTrack(newVideoTrack);
+           newVideoTrack.enabled = wasEnabled;
+         }
+       }
+       
+       set({ selectedVideoDevice: deviceId });
+       localStorage.setItem("preferredVideoDevice", deviceId);
+       
+       toast.success(`카메라 변경: ${device.label}`);
+       
+     } catch (error) {
+       console.error('[Lobby] Failed to change video device:', error);
+       toast.error('카메라 변경 실패');
+     }
   },
   
   setAudioLevel: (level: number) => set({ audioLevel: level }),

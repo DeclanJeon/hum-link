@@ -96,110 +96,140 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       isFileStreaming
     } = get();
     
+    // 검증 로직
     if (!isMobile || !hasMultipleCameras) {
+      toast.warning('카메라 전환은 모바일에서만 가능합니다');
       return;
     }
     
-    if (isSharingScreen) {
-      toast.warning('Cannot switch camera while screen sharing');
-      return;
-    }
-    
-    if (isFileStreaming) {
-      toast.warning('Cannot switch camera while file streaming');
+    if (isSharingScreen || isFileStreaming) {
+      toast.warning('화면 공유 또는 파일 스트리밍 중에는 카메라를 전환할 수 없습니다');
       return;
     }
     
     if (!localStream) {
-      toast.error('No active stream');
+      toast.error('활성 스트림이 없습니다');
       return;
     }
     
     try {
       const currentVideoTrack = localStream.getVideoTracks()[0];
       if (!currentVideoTrack) {
-        toast.error('No video track found');
+        toast.error('비디오 트랙을 찾을 수 없습니다');
         return;
       }
       
       const wasEnabled = currentVideoTrack.enabled;
+      const currentFacing = cameraManager.getCurrentFacing();
+      const targetFacing: CameraFacing = currentFacing === 'user' ? 'environment' : 'user';
       
-      console.log('[MediaDevice] Starting camera switch...');
+      console.log(`[MediaDevice] Switching: ${currentFacing} → ${targetFacing}`);
       
-      // 1. 새 스트림 생성
-      const newStream = await cameraManager.switchCamera(localStream);
+      // 🔑 핵심: getUserMedia로 새 스트림 획득 (iOS 호환)
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: { ideal: targetFacing }, // exact 대신 ideal 사용
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      };
       
-      if (!newStream || newStream === localStream) {
-        toast.error('Failed to switch camera');
-        return;
+      let newStream: MediaStream;
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (error: any) {
+        // Fallback: deviceId로 직접 선택
+        console.warn('[MediaDevice] facingMode failed, trying deviceId approach');
+        
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cameras = devices.filter(d => d.kind === 'videoinput');
+        
+        // 현재 카메라가 아닌 다른 카메라 선택
+        const currentDeviceId = currentVideoTrack.getSettings().deviceId;
+        const nextCamera = cameras.find(cam => cam.deviceId !== currentDeviceId);
+        
+        if (!nextCamera) {
+          throw new Error('다른 카메라를 찾을 수 없습니다');
+        }
+        
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: nextCamera.deviceId } },
+          audio: false
+        });
       }
       
       const newVideoTrack = newStream.getVideoTracks()[0];
       if (!newVideoTrack) {
-        toast.error('New stream has no video track');
-        return;
+        throw new Error('새 비디오 트랙을 생성하지 못했습니다');
       }
       
-      // 2. WebRTC 피어 연결 업데이트
+      // 오디오 트랙 복사 (있을 경우)
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        newStream.addTrack(audioTrack.clone());
+      }
+      
+      // 🔑 WebRTC 연결에 트랙 교체 (비동기 처리)
       const { webRTCManager } = usePeerConnectionStore.getState();
       if (webRTCManager) {
-        console.log('[MediaDevice] Replacing track in WebRTC connections...');
+        console.log('[MediaDevice] Replacing track in peer connections...');
         
-        // 모든 피어에 대해 트랙 교체
+        // replaceTrack은 renegotiation 없이 트랙만 교체
         await webRTCManager.replaceTrack(currentVideoTrack, newVideoTrack, newStream);
         
-        // 교체 성공 확인
-        const connectedPeers = webRTCManager.getConnectedPeerIds();
-        console.log(`[MediaDevice] Track replaced for ${connectedPeers.length} peers`);
+        console.log('[MediaDevice] Track replacement successful');
       }
       
-      // 3. 로컬 스트림 업데이트
+      // 로컬 스트림 업데이트
       localStream.removeTrack(currentVideoTrack);
       localStream.addTrack(newVideoTrack);
       
-      // 4. 이전 트랙 정리
-      currentVideoTrack.stop();
+      // 🔑 이전 트랙 정리 (약간의 지연 후)
+      setTimeout(() => {
+        currentVideoTrack.stop();
+      }, 100);
       
-      // 5. 새 트랙 상태 복원
+      // enabled 상태 복원
       newVideoTrack.enabled = wasEnabled;
       
-      // 6. Store 상태 업데이트
+      // Store 업데이트
       set({
         localStream: newStream,
-        cameraFacing: cameraManager.getCurrentFacing(),
+        cameraFacing: targetFacing,
         isVideoEnabled: wasEnabled
       });
       
-      // 7. Lobby 스트림도 업데이트 (Room에서 사용 중인 경우)
+      // Lobby 스트림 동기화
       const { stream: lobbyStream } = useLobbyStore.getState();
-      if (lobbyStream && lobbyStream === localStream) {
+      if (lobbyStream === localStream) {
         useLobbyStore.setState({ stream: newStream });
-        console.log('[MediaDevice] Lobby stream updated');
       }
       
-      // 8. 시그널링 서버에 미디어 상태 알림
+      // 시그널링 상태 업데이트
       useSignalingStore.getState().updateMediaState({
         kind: 'video',
         enabled: wasEnabled
       });
       
-      console.log('[MediaDevice] Camera switch completed successfully');
+      // CameraManager 상태 업데이트
+      // cameraManager.setCurrentFacing(targetFacing); // CameraManager에 setCurrentFacing 메서드가 없으므로 제거
       
-      toast.success(`Switched to ${cameraManager.getCurrentFacing()} camera`, {
-        duration: 1000,
+      toast.success(`${targetFacing === 'user' ? '전면' : '후면'} 카메라로 전환됨`, {
+        duration: 1500,
         position: 'top-center'
       });
       
     } catch (error) {
       console.error('[MediaDevice] Camera switch failed:', error);
-      toast.error('Failed to switch camera');
+      toast.error('카메라 전환 실패');
       
-      // 롤백: 원래 스트림 복원 시도
+      // 롤백: 원래 스트림 복원
       try {
         const { webRTCManager } = usePeerConnectionStore.getState();
         if (webRTCManager && localStream) {
-          const currentTrack = localStream.getVideoTracks()[0];
-          if (currentTrack) {
+          const track = localStream.getVideoTracks()[0];
+          if (track) {
             webRTCManager.updateLocalStream(localStream);
           }
         }
