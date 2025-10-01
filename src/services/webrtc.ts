@@ -41,7 +41,13 @@ export class WebRTCManager {
   private iceServers: RTCIceServer[] = [
     // 기본 STUN 서버만 (TURN은 동적으로 받음)
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
+    { urls: 'stun:stun1.l.google.com:19302' },
+    // 폴백 TURN 서버 추가
+    {
+      urls: 'turn:turn.peerterra.com:3478',
+      username: 'kron_turn',
+      credential: 'kron1234'
+    }
   ];
   
   /**
