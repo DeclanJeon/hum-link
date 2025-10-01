@@ -17,6 +17,9 @@ import { toast } from 'sonner';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 import { useTurnCredentials } from '@/hooks/useTurnCredentials';
+import { useSignalingStore } from '@/stores/useSignalingStore';
+import { useMediaDeviceStore } from '@/stores/useMediaDeviceStore';
+import { usePeerConnectionStore } from '@/stores/usePeerConnectionStore';
 
 const Room = () => {
   const navigate = useNavigate();
@@ -85,6 +88,67 @@ const Room = () => {
       navigate(`/lobby/${roomTitle || ''}`);
     }
   }, [roomParams, navigate, roomTitle]);
+
+  useEffect(() => {
+    // 브라우저 종료/새로고침 감지
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      const { disconnect } = useSignalingStore.getState();
+      disconnect(); // 즉시 연결 해제
+      
+      // 통화 중일 때만 경고 표시
+      if (roomParams) {
+        e.preventDefault();
+        e.returnValue = ''; // Chrome requires returnValue to be set
+      }
+    };
+
+    // 페이지 숨김 감지 (모바일 앱 전환 등)
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        console.log('[Room] 페이지가 숨겨짐 (백그라운드 전환)');
+        // 필요시 추가 처리
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      
+      // 컴포넌트 언마운트 시 정리
+      const { disconnect } = useSignalingStore.getState();
+      disconnect();
+      clearSession();
+    };
+  }, [roomParams]);
+  
+  // useEffect에 스트림 변경 감지 추가
+  useEffect(() => {
+    if (!roomParams) return;
+    
+    // MediaDeviceStore의 localStream 변경 감지
+    const unsubscribe = useMediaDeviceStore.subscribe(
+      (state) => {
+        if (state.localStream && roomParams.localStream !== state.localStream) {
+          console.log('[Room] Local stream changed, updating room params');
+          
+          // roomParams 업데이트 (불변성 유지)
+          // 주의: roomParams는 useMemo로 생성되므로 직접 수정 불가
+          // 대신 usePeerConnectionStore의 webRTCManager.updateLocalStream 호출
+          const { webRTCManager } = usePeerConnectionStore.getState();
+          if (webRTCManager) {
+            webRTCManager.updateLocalStream(state.localStream);
+          }
+        }
+      }
+    );
+    
+    return () => {
+      unsubscribe();
+    };
+  }, [roomParams]);
 
   useEffect(() => {
     return () => {

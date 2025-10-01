@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { usePeerConnectionStore } from './usePeerConnectionStore';
 import { useSignalingStore } from './useSignalingStore';
+import { useLobbyStore } from './useLobbyStore';
 import { cameraManager, CameraFacing } from '@/lib/cameraStrategy';
 import { toast } from 'sonner';
 
@@ -86,7 +87,14 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
   },
 
   switchCamera: async () => {
-    const { localStream, isMobile, hasMultipleCameras, isVideoEnabled, isSharingScreen, isFileStreaming } = get();
+    const {
+      localStream,
+      isMobile,
+      hasMultipleCameras,
+      isVideoEnabled,
+      isSharingScreen,
+      isFileStreaming
+    } = get();
     
     if (!isMobile || !hasMultipleCameras) {
       return;
@@ -109,40 +117,95 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     
     try {
       const currentVideoTrack = localStream.getVideoTracks()[0];
-      const wasEnabled = currentVideoTrack?.enabled || false;
+      if (!currentVideoTrack) {
+        toast.error('No video track found');
+        return;
+      }
       
+      const wasEnabled = currentVideoTrack.enabled;
+      
+      console.log('[MediaDevice] Starting camera switch...');
+      
+      // 1. 새 스트림 생성
       const newStream = await cameraManager.switchCamera(localStream);
       
-      if (newStream && newStream !== localStream) {
-        const oldVideoTrack = localStream.getVideoTracks()[0];
-        const newVideoTrack = newStream.getVideoTracks()[0];
-        
-        if (oldVideoTrack && newVideoTrack) {
-          const { webRTCManager } = usePeerConnectionStore.getState();
-          if (webRTCManager) {
-            webRTCManager.replaceTrack(oldVideoTrack, newVideoTrack, newStream);
-          }
-          
-          localStream.removeTrack(oldVideoTrack);
-          localStream.addTrack(newVideoTrack);
-          oldVideoTrack.stop();
-          
-          newVideoTrack.enabled = wasEnabled;
-          
-          set({
-            localStream: newStream,
-            cameraFacing: cameraManager.getCurrentFacing()
-          });
-          
-          toast.success(`Camera switched`, {
-            duration: 1000,
-            position: 'top-center'
-          });
-        }
+      if (!newStream || newStream === localStream) {
+        toast.error('Failed to switch camera');
+        return;
       }
+      
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (!newVideoTrack) {
+        toast.error('New stream has no video track');
+        return;
+      }
+      
+      // 2. WebRTC 피어 연결 업데이트
+      const { webRTCManager } = usePeerConnectionStore.getState();
+      if (webRTCManager) {
+        console.log('[MediaDevice] Replacing track in WebRTC connections...');
+        
+        // 모든 피어에 대해 트랙 교체
+        await webRTCManager.replaceTrack(currentVideoTrack, newVideoTrack, newStream);
+        
+        // 교체 성공 확인
+        const connectedPeers = webRTCManager.getConnectedPeerIds();
+        console.log(`[MediaDevice] Track replaced for ${connectedPeers.length} peers`);
+      }
+      
+      // 3. 로컬 스트림 업데이트
+      localStream.removeTrack(currentVideoTrack);
+      localStream.addTrack(newVideoTrack);
+      
+      // 4. 이전 트랙 정리
+      currentVideoTrack.stop();
+      
+      // 5. 새 트랙 상태 복원
+      newVideoTrack.enabled = wasEnabled;
+      
+      // 6. Store 상태 업데이트
+      set({
+        localStream: newStream,
+        cameraFacing: cameraManager.getCurrentFacing(),
+        isVideoEnabled: wasEnabled
+      });
+      
+      // 7. Lobby 스트림도 업데이트 (Room에서 사용 중인 경우)
+      const { stream: lobbyStream } = useLobbyStore.getState();
+      if (lobbyStream && lobbyStream === localStream) {
+        useLobbyStore.setState({ stream: newStream });
+        console.log('[MediaDevice] Lobby stream updated');
+      }
+      
+      // 8. 시그널링 서버에 미디어 상태 알림
+      useSignalingStore.getState().updateMediaState({
+        kind: 'video',
+        enabled: wasEnabled
+      });
+      
+      console.log('[MediaDevice] Camera switch completed successfully');
+      
+      toast.success(`Switched to ${cameraManager.getCurrentFacing()} camera`, {
+        duration: 1000,
+        position: 'top-center'
+      });
+      
     } catch (error) {
       console.error('[MediaDevice] Camera switch failed:', error);
       toast.error('Failed to switch camera');
+      
+      // 롤백: 원래 스트림 복원 시도
+      try {
+        const { webRTCManager } = usePeerConnectionStore.getState();
+        if (webRTCManager && localStream) {
+          const currentTrack = localStream.getVideoTracks()[0];
+          if (currentTrack) {
+            webRTCManager.updateLocalStream(localStream);
+          }
+        }
+      } catch (rollbackError) {
+        console.error('[MediaDevice] Rollback failed:', rollbackError);
+      }
     }
   },
 

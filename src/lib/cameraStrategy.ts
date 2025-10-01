@@ -78,56 +78,75 @@ export class CameraManager {
     const newFacing: CameraFacing = this.currentFacing === 'user' ? 'environment' : 'user';
     
     try {
-      // 현재 스트림의 오디오 트랙 보존
+      console.log(`[CameraManager] Switching from ${this.currentFacing} to ${newFacing}`);
+      
+      // 현재 오디오 트랙 백업
       const audioTrack = currentStream?.getAudioTracks()[0];
       
-      // 새 비디오 스트림 생성
+      // 새 비디오 스트림 획득 (exact constraint)
       const constraints: MediaStreamConstraints = {
-        video: { facingMode: { exact: newFacing } },
-        audio: false // 오디오는 별도로 처리
+        video: {
+          facingMode: { exact: newFacing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false // 오디오는 별도로 추가
       };
       
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      let newStream: MediaStream;
       
-      // 오디오 트랙이 있으면 새 스트림에 추가
-      if (audioTrack) {
-        newStream.addTrack(audioTrack.clone());
-      }
-      
-      // 이전 비디오 트랙 정지
-      currentStream?.getVideoTracks().forEach(track => track.stop());
-      
-      this.currentFacing = newFacing;
-      
-      toast.success(`Switched to ${newFacing === 'user' ? 'front' : 'back'} camera`);
-      return newStream;
-      
-    } catch (error: any) {
-      // exact 제약이 실패하면 ideal로 재시도
       try {
+        newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (exactError) {
+        console.warn('[CameraManager] Exact constraint failed, trying ideal...');
+        
+        // Fallback: ideal constraint
         const fallbackConstraints: MediaStreamConstraints = {
-          video: { facingMode: newFacing },
+          video: {
+            facingMode: newFacing,
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
           audio: false
         };
         
-        const newStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
-        
-        const audioTrack = currentStream?.getAudioTracks()[0];
-        if (audioTrack) {
-          newStream.addTrack(audioTrack.clone());
-        }
-        
-        currentStream?.getVideoTracks().forEach(track => track.stop());
-        
-        this.currentFacing = newFacing;
-        toast.success(`Switched camera`);
-        return newStream;
-        
-      } catch (fallbackError) {
-        console.error('[CameraManager] Failed to switch camera:', fallbackError);
-        toast.error('Failed to switch camera');
-        return currentStream;
+        newStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
       }
+      
+      // 오디오 트랙 복원
+      if (audioTrack && audioTrack.readyState === 'live') {
+        newStream.addTrack(audioTrack.clone());
+        console.log('[CameraManager] Audio track restored to new stream');
+      }
+      
+      // 이전 비디오 트랙 정리 (오디오는 유지)
+      currentStream?.getVideoTracks().forEach(track => {
+        track.stop();
+        console.log(`[CameraManager] Stopped old video track: ${track.label}`);
+      });
+      
+      this.currentFacing = newFacing;
+      
+      console.log(`[CameraManager] Camera switched successfully to ${newFacing}`);
+      toast.success(`Switched to ${newFacing === 'user' ? 'front' : 'back'} camera`);
+      
+      return newStream;
+      
+    } catch (error: any) {
+      console.error('[CameraManager] Failed to switch camera:', error);
+      
+      // 에러 메시지 개선
+      if (error.name === 'NotFoundError') {
+        toast.error('Camera not found');
+      } else if (error.name === 'NotAllowedError') {
+        toast.error('Camera permission denied');
+      } else if (error.name === 'OverconstrainedError') {
+        toast.error('Camera does not support requested constraints');
+      } else {
+        toast.error('Failed to switch camera');
+      }
+      
+      return currentStream;
     }
   }
 
