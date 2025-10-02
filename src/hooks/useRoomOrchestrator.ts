@@ -13,7 +13,6 @@ import { useWhiteboardStore } from '@/stores/useWhiteboardStore';
 import { useTranscriptionStore } from '@/stores/useTranscriptionStore';
 import { useSubtitleStore } from '@/stores/useSubtitleStore';
 import { useFileStreamingStore } from '@/stores/useFileStreamingStore';
-import { useTurnCredentials } from './useTurnCredentials';
 
 interface RoomParams {
   roomId: string;
@@ -68,9 +67,6 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
     setRemoteSubtitleCue,
   } = useSubtitleStore();
   const { isStreaming: isLocalStreaming } = useFileStreamingStore();
-
-  // TURN 자격증명 요청
-  useTurnCredentials();
 
   /**
    * 데이터 채널 메시지 핸들러

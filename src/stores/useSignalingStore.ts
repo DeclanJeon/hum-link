@@ -6,6 +6,7 @@ import { ENV } from '@/config';
 import { ChatMessage } from './useChatStore';
 import { usePeerConnectionStore } from './usePeerConnectionStore';
 import { toast } from 'sonner';
+import { useTurnCredentials } from '@/hooks/useTurnCredentials';
 
 type SignalingStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -64,6 +65,9 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
       set({ status: 'connected' });
       events.onConnect();
       socket.emit('join-room', { roomId, userId, nickname });
+
+      // TURN 자격증명 요청
+      useTurnCredentials();
       
       // 🔥 하트비트 시작 (30초마다)
       const heartbeatInterval = setInterval(() => {
