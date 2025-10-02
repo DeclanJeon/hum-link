@@ -145,8 +145,8 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
         console.log(`[SIGNALING_CORE] 📥 [room-users] 이벤트 수신:`, users);
         events.onRoomUsers(users);
 
-        // TURN 자격증명 요청
-        useTurnCredentials();
+        console.log('📡 [Signaling] Requesting TURN credentials...');
+        socket.emit('request-turn-credentials');
     });
     socket.on('user-joined', (user) => {
         console.log(`[SIGNALING_CORE] 📥 [user-joined] 이벤트 수신:`, user);
