@@ -1,6 +1,8 @@
+// frontend/src/stores/useLobbyStore.ts
 import { create } from 'zustand';
 import { produce } from 'immer';
 import { mediaCapabilityDetector, MediaCapabilities } from '@/lib/mediaCapabilityDetector';
+import { useMediaDeviceStore } from './useMediaDeviceStore';
 import nicknamesData from '@/data/nicknames.json';
 
 interface ConnectionDetails {
@@ -20,7 +22,7 @@ interface LobbyState {
   analyser: AnalyserNode | null;
   audioDevices: MediaDeviceInfo[];
   videoDevices: MediaDeviceInfo[];
-  // 새로 추가
+  // 미디어 기능
   mediaCapabilities: MediaCapabilities | null;
   isDummyStream: boolean;
   streamWarnings: string[];
@@ -50,8 +52,8 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   isAudioEnabled: true,
   isVideoEnabled: true,
   audioLevel: 0,
-  selectedAudioDevice: null,
-  selectedVideoDevice: null,
+  selectedAudioDevice: '',
+  selectedVideoDevice: '',
   stream: null,
   audioContext: null,
   analyser: null,
@@ -68,19 +70,19 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   },
 
   /**
-   * 디바이스 초기화 및 선택
+   * 미디어 초기화
    */
   initializeMedia: async (toast: any) => {
     try {
-      // 디바이스 capability 감지
+      // 먼저 capability 검사
       const capabilities = await mediaCapabilityDetector.detectCapabilities();
       set({ mediaCapabilities: capabilities });
 
-      // 저장된 디바이스 ID 로드 (localStorage)
+      // 선호하는 디바이스 ID 가져오기 (localStorage)
       const preferredAudioDevice = localStorage.getItem("preferredAudioDevice");
       const preferredVideoDevice = localStorage.getItem("preferredVideoDevice");
 
-      // 🔑 핵심: 유효한 디바이스만 필터링
+      // 유효한 디바이스만 필터링
       const validAudioDevices = capabilities.microphones.filter(
         d => d.deviceId && d.deviceId !== "" && d.deviceId !== "default"
       );
@@ -88,11 +90,11 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
         d => d.deviceId && d.deviceId !== "" && d.deviceId !== "default"
       );
 
-      // 초기 디바이스 선택 로직
+      // 선택된 디바이스 결정
       let selectedAudioId = preferredAudioDevice;
       let selectedVideoId = preferredVideoDevice;
 
-      // 저장된 디바이스가 없거나 유효하지 않으면 첫 번째 선택
+      // 선호 디바이스가 없거나 유효하지 않으면 첫 번째 디바이스 사용
       if (!selectedAudioId || !validAudioDevices.find(d => d.deviceId === selectedAudioId)) {
         selectedAudioId = validAudioDevices[0]?.deviceId || "";
       }
@@ -115,7 +117,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
           { width: { ideal: 1280 }, height: { ideal: 720 } }
       };
 
-      // 스트림 획득
+      // 스트림 생성
       const result = await mediaCapabilityDetector.getConstrainedStream(constraints, true);
       
       set({
@@ -133,13 +135,13 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
         get().initializeAudioAnalysis(result.stream);
       }
 
-      // 사용자 피드백
+      // 토스트 메시지
       if (result.isDummy) {
-        toast.info("카메라 또는 마이크가 감지되지 않았습니다. 수신 전용 모드로 참여할 수 있습니다.");
+        toast.info("카메라와 마이크를 사용할 수 없습니다. 수신 전용 모드로 진행합니다.");
       } else if (result.warnings.length > 0) {
-        toast.warning(`제한된 접근: ${result.warnings.join(', ')}`);
+        toast.warning(`주의: ${result.warnings.join(', ')}`);
       } else {
-        toast.success("카메라와 마이크가 준비되었습니다!");
+        toast.success("미디어 준비 완료!");
       }
       
     } catch (error) {
@@ -154,10 +156,10 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
       set({
         stream: dummyResult.stream,
         isDummyStream: true,
-        streamWarnings: ['미디어 디바이스에 접근할 수 없습니다']
+        streamWarnings: ['카메라와 마이크를 사용할 수 없습니다']
       });
       
-      toast.error("미디어 디바이스에 접근할 수 없습니다. 수신 전용 모드로 참여합니다.");
+      toast.error("미디어 장치에 접근할 수 없습니다. 수신 전용 모드로 진행합니다.");
     }
   },
 
@@ -194,7 +196,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   toggleAudio: () => {
     const { isAudioEnabled, stream, mediaCapabilities } = get();
     
-    // 마이크가 없으면 토글 불가
+    // 마이크가 없으면 무시
     if (!mediaCapabilities?.hasMicrophone) {
       return;
     }
@@ -207,7 +209,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   toggleVideo: async (toast: any) => {
     const { isVideoEnabled, stream, mediaCapabilities } = get();
     
-    // 카메라가 없으면 토글 불가
+    // 카메라가 없으면 경고
     if (!mediaCapabilities?.hasCamera) {
       toast.warning("No camera available");
       return;
@@ -218,100 +220,36 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     stream?.getVideoTracks().forEach(track => { track.enabled = newVideoState; });
   },
 
-   /**
-    * 오디오 디바이스 변경
-    */
-   setSelectedAudioDevice: async (deviceId: string, toast: any) => {
-     const { stream, audioDevices } = get();
-     
-     // 유효성 검사
-     const device = audioDevices.find(d => d.deviceId === deviceId);
-     if (!device) {
-       console.error('[Lobby] Invalid audio device:', deviceId);
-       return;
-     }
-     
-     try {
-       // 새 오디오 스트림 생성
-       const newAudioStream = await navigator.mediaDevices.getUserMedia({
-         audio: { deviceId: { exact: deviceId } }
-       });
-       
-       const newAudioTrack = newAudioStream.getAudioTracks()[0];
-       
-       if (stream) {
-         // 기존 오디오 트랙 교체
-         const oldAudioTrack = stream.getAudioTracks()[0];
-         if (oldAudioTrack) {
-           stream.removeTrack(oldAudioTrack);
-           oldAudioTrack.stop();
-         }
-         
-         stream.addTrack(newAudioTrack);
-         
-         // 오디오 분석 재초기화
-         get().initializeAudioAnalysis(stream);
-       }
-       
-       set({ selectedAudioDevice: deviceId });
-       localStorage.setItem("preferredAudioDevice", deviceId);
-       
-       toast.success(`마이크 변경: ${device.label}`);
-       
-     } catch (error) {
-       console.error('[Lobby] Failed to change audio device:', error);
-       toast.error('마이크 변경 실패');
-     }
+  /**
+   * 오디오 디바이스 변경 (MediaDeviceStore로 위임)
+   */
+  setSelectedAudioDevice: async (deviceId: string, toast: any) => {
+    const { changeAudioDevice } = useMediaDeviceStore.getState();
+    const success = await changeAudioDevice(deviceId);
+    
+    if (success) {
+      set({ selectedAudioDevice: deviceId });
+      
+      const { audioDevices } = get();
+      const device = audioDevices.find(d => d.deviceId === deviceId);
+      toast.success(`마이크가 "${device?.label}"로 변경되었습니다`);
+    }
   },
-   
-   /**
-    * 비디오 디바이스 변경
-    */
-   setSelectedVideoDevice: async (deviceId: string, toast: any) => {
-     const { stream, videoDevices } = get();
-     
-     // 유효성 검사
-     const device = videoDevices.find(d => d.deviceId === deviceId);
-     if (!device) {
-       console.error('[Lobby] Invalid video device:', deviceId);
-       return;
-     }
-     
-     try {
-       // 새 비디오 스트림 생성
-       const newVideoStream = await navigator.mediaDevices.getUserMedia({
-         video: {
-           deviceId: { exact: deviceId },
-           width: { ideal: 1280 },
-           height: { ideal: 720 }
-         }
-       });
-       
-       const newVideoTrack = newVideoStream.getVideoTracks()[0];
-       
-       if (stream) {
-         // 기존 비디오 트랙 교체
-         const oldVideoTrack = stream.getVideoTracks()[0];
-         if (oldVideoTrack) {
-           const wasEnabled = oldVideoTrack.enabled;
-           
-           stream.removeTrack(oldVideoTrack);
-           oldVideoTrack.stop();
-           
-           stream.addTrack(newVideoTrack);
-           newVideoTrack.enabled = wasEnabled;
-         }
-       }
-       
-       set({ selectedVideoDevice: deviceId });
-       localStorage.setItem("preferredVideoDevice", deviceId);
-       
-       toast.success(`카메라 변경: ${device.label}`);
-       
-     } catch (error) {
-       console.error('[Lobby] Failed to change video device:', error);
-       toast.error('카메라 변경 실패');
-     }
+  
+  /**
+   * 비디오 디바이스 변경 (MediaDeviceStore로 위임)
+   */
+  setSelectedVideoDevice: async (deviceId: string, toast: any) => {
+    const { changeVideoDevice } = useMediaDeviceStore.getState();
+    const success = await changeVideoDevice(deviceId);
+    
+    if (success) {
+      set({ selectedVideoDevice: deviceId });
+      
+      const { videoDevices } = get();
+      const device = videoDevices.find(d => d.deviceId === deviceId);
+      toast.success(`카메라가 "${device?.label}"로 변경되었습니다`);
+    }
   },
   
   setAudioLevel: (level: number) => set({ audioLevel: level }),
