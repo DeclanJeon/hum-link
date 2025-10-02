@@ -1,3 +1,4 @@
+// frontend/src/stores/useSettingsStore.ts
 import { create } from 'zustand';
 
 interface SettingsState {
@@ -47,8 +48,13 @@ export const useSettingsStore = create<SettingsState & SettingsActions>((set, ge
         audioDevices: devices.filter(device => device.kind === 'audioinput'),
         videoDevices: devices.filter(device => device.kind === 'videoinput')
       });
+      
+      console.log('[SettingsStore] Devices initialized:', {
+        audio: devices.filter(d => d.kind === 'audioinput').length,
+        video: devices.filter(d => d.kind === 'videoinput').length
+      });
     } catch (error) {
-      console.error('Error getting devices:', error);
+      console.error('[SettingsStore] Error getting devices:', error);
     }
   },
 
