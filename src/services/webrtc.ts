@@ -1,4 +1,4 @@
-// src/services/webrtc.ts
+// frontend/src/services/webrtc.ts
 import Peer from 'simple-peer/simplepeer.min.js';
 import type { Instance as PeerInstance, SignalData } from 'simple-peer';
 import { useSignalingStore } from '@/stores/useSignalingStore';
@@ -39,10 +39,8 @@ export class WebRTCManager {
   }
 
   private iceServers: RTCIceServer[] = [
-    // 기본 STUN 서버만 (TURN은 동적으로 받음)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    // 폴백 TURN 서버 추가
     {
       urls: 'turn:turn.peerterra.com:3478',
       username: 'kron_turn',
@@ -51,21 +49,98 @@ export class WebRTCManager {
   ];
   
   /**
-   * ICE 서버 동적 업데이트
+   * ICE 서버 업데이트
    */
   public updateIceServers(servers: RTCIceServer[]): void {
     this.iceServers = servers;
-    console.log('[WebRTC] ICE 서버 업데이트 (TURN 포함)');
+    console.log('[WebRTC] ICE 서버 업데이트 완료 (TURN 포함)');
     
-    // 디버그: TURN 서버 확인
     const turnServers = servers.filter(s => 
       s.urls.toString().includes('turn')
     );
-    console.log(`[WebRTC] TURN 서버 ${turnServers.length}개 구성됨`);
+    console.log(`[WebRTC] TURN 서버 ${turnServers.length}개 등록됨`);
+  }
+
+  /**
+   * 🔄 완전히 개선된 트랙 교체 로직
+   */
+  public async replaceTrack(
+    oldTrack: MediaStreamTrack,
+    newTrack: MediaStreamTrack,
+    stream: MediaStream
+  ): Promise<void> {
+    const results: Array<{ peerId: string; success: boolean; error?: Error }> = [];
+    
+    console.log(`[WebRTC] 트랙 교체 시작`);
+    console.log(`[WebRTC] 이전 트랙: ${oldTrack.label} (${oldTrack.kind})`);
+    console.log(`[WebRTC] 새 트랙: ${newTrack.label} (${newTrack.kind})`);
+    console.log(`[WebRTC] 연결된 Peer 수: ${this.peers.size}`);
+    
+    // Peer가 없으면 바로 성공 반환
+    if (this.peers.size === 0) {
+      console.log('[WebRTC] 연결된 Peer가 없어 트랙 교체 스킵');
+      return;
+    }
+    
+    for (const [peerId, peer] of this.peers.entries()) {
+      if (peer.destroyed) {
+        console.warn(`[WebRTC] Peer ${peerId}는 이미 파괴됨, 스킵`);
+        results.push({ peerId, success: false, error: new Error('Peer destroyed') });
+        continue;
+      }
+      
+      try {
+        console.log(`[WebRTC] Peer ${peerId} 트랙 교체 시도 중...`);
+        
+        // ⚠️ 핵심: replaceTrack이 완료될 때까지 대기
+        await peer.replaceTrack(oldTrack, newTrack, stream);
+        
+        console.log(`[WebRTC] Peer ${peerId} 트랙 교체 성공 ✅`);
+        results.push({ peerId, success: true });
+        
+        // 🔄 추가: Renegotiation 대기 (안정화 시간 확보)
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+      } catch (error) {
+        console.error(`[WebRTC] Peer ${peerId} 트랙 교체 실패:`, error);
+        
+        // Fallback: removeTrack + addTrack
+        try {
+          console.log(`[WebRTC] Peer ${peerId} Fallback 시도 (removeTrack + addTrack)...`);
+          
+          await peer.removeTrack(oldTrack, stream);
+          await peer.addTrack(newTrack, stream);
+          
+          console.log(`[WebRTC] Peer ${peerId} Fallback 성공 ✅`);
+          results.push({ peerId, success: true });
+          
+        } catch (fallbackError) {
+          console.error(`[WebRTC] Peer ${peerId} Fallback도 실패:`, fallbackError);
+          results.push({
+            peerId,
+            success: false,
+            error: fallbackError as Error
+          });
+        }
+      }
+    }
+    
+    const successful = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+    
+    console.log(`[WebRTC] 트랙 교체 완료: ${successful}개 성공, ${failed}개 실패`);
+    
+    if (failed > 0) {
+      const failedPeers = results.filter(r => !r.success).map(r => r.peerId).join(', ');
+      console.error(`[WebRTC] 실패한 Peer 목록: ${failedPeers}`);
+      
+      throw new Error(
+        `${failed}개 Peer에서 트랙 교체 실패: ${failedPeers}`
+      );
+    }
   }
 
   public createPeer(peerId: string, initiator: boolean): PeerInstance {
-
     const { iceServers } = useSignalingStore.getState();
 
     if (this.peers.has(peerId)) {
@@ -79,7 +154,7 @@ export class WebRTCManager {
       config: {
         iceServers: iceServers || this.iceServers,
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: 'all', // 'relay'로 설정하면 TURN만 사용
+        iceTransportPolicy: 'all',
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require'
       },
@@ -89,7 +164,7 @@ export class WebRTCManager {
       }
     };
 
-    console.log(`[WebRTC] Peer ${peerId} 생성 (ICE 서버: ${peerConfig.config.iceServers.length}개)`);
+    console.log(`[WebRTC] Peer ${peerId} 생성 중 (ICE 서버 수: ${peerConfig.config.iceServers.length})`);
 
     if (this.localStream && this.localStream.getTracks().length > 0) {
       peerConfig.stream = this.localStream;
@@ -104,7 +179,7 @@ export class WebRTCManager {
     peer.on('connect', () => {
       this.setupDataChannelBuffer(peer, peerId);
       this.connectionRetries.set(peerId, 0);
-      console.log(`[WebRTC] Peer ${peerId} connected`);
+      console.log(`[WebRTC] Peer ${peerId} 연결됨`);
     });
     
     return peer;
@@ -119,7 +194,7 @@ export class WebRTCManager {
       this.events.onBufferLow?.(peerId);
     };
 
-    console.log(`[WebRTC] DataChannel buffer configured for peer ${peerId}`);
+    console.log(`[WebRTC] DataChannel 버퍼 설정 완료 (Peer ${peerId})`);
   }
 
   public async sendWithFlowControl(
@@ -142,7 +217,7 @@ export class WebRTCManager {
     
     while (channel.bufferedAmount > MAX_BUFFER) {
       if (Date.now() - startTime > timeout) {
-        console.warn(`[WebRTC] Send timeout for peer ${peerId}, buffer full`);
+        console.warn(`[WebRTC] Peer ${peerId} 전송 타임아웃, 버퍼 가득 찬 상태`);
         return false;
       }
       
@@ -158,10 +233,10 @@ export class WebRTCManager {
       return true;
     } catch (error: any) {
       if (error.message?.includes('queue is full')) {
-        console.warn(`[WebRTC] Queue full for peer ${peerId}, will retry`);
+        console.warn(`[WebRTC] Peer ${peerId} 큐 가득 참, 재시도 필요`);
         return false;
       }
-      console.warn(`[WebRTC] Failed to send to peer ${peerId}:`, error);
+      console.warn(`[WebRTC] Peer ${peerId} 전송 실패:`, error);
       return false;
     }
   }
@@ -169,21 +244,21 @@ export class WebRTCManager {
   public sendToPeer(peerId: string, message: any): boolean {
     const peer = this.peers.get(peerId);
     if (!peer || !peer.connected || peer.destroyed) {
-      console.warn(`[WebRTC] Cannot send to peer ${peerId}: not connected`);
+      console.warn(`[WebRTC] Peer ${peerId}로 전송 불가: 연결 안 됨`);
       return false;
     }
 
     try {
       const channel = (peer as any)._channel;
       if (!channel || channel.readyState !== 'open') {
-        console.warn(`[WebRTC] Cannot send to peer ${peerId}: channel not open`);
+        console.warn(`[WebRTC] Peer ${peerId}로 전송 불가: 채널 열리지 않음`);
         return false;
       }
 
       peer.send(message);
       return true;
     } catch (error) {
-      console.error(`[WebRTC] Failed to send to peer ${peerId}:`, error);
+      console.error(`[WebRTC] Peer ${peerId} 전송 실패:`, error);
       return false;
     }
   }
@@ -204,7 +279,7 @@ export class WebRTCManager {
       try {
         peer.signal(signal);
       } catch (error) {
-        console.error(`[WebRTC] Failed to signal peer ${peerId}:`, error);
+        console.error(`[WebRTC] Peer ${peerId} 시그널 실패:`, error);
       }
     }
   }
@@ -217,7 +292,7 @@ export class WebRTCManager {
           peer.destroy();
         }
       } catch (error) {
-        console.warn(`[WebRTC] Error destroying peer ${peerId}:`, error);
+        console.warn(`[WebRTC] Peer ${peerId} 파괴 오류:`, error);
       }
       this.peers.delete(peerId);
     }
@@ -242,7 +317,7 @@ export class WebRTCManager {
           if (message instanceof ArrayBuffer && message.byteLength > BUFFER_HIGH_THRESHOLD) {
             this.sendWithFlowControl(peerId, message).then(success => {
               if (!success) {
-                console.warn(`[WebRTC] Flow control send failed for peer ${peerId}`);
+                console.warn(`[WebRTC] Peer ${peerId} 흐름 제어 전송 실패`);
               }
             });
           } else {
@@ -250,7 +325,7 @@ export class WebRTCManager {
           }
           successful.push(peerId);
         } catch (error) {
-          console.warn(`[WebRTC] Failed to send data to peer (${peerId}):`, error);
+          console.warn(`[WebRTC] Peer ${peerId} 데이터 전송 실패:`, error);
           failed.push(peerId);
         }
       } else {
@@ -261,127 +336,53 @@ export class WebRTCManager {
     return { successful, failed };
   }
 
-  /**
-   * 모든 피어에 대해 트랙 교체 (동기적)
-   */
-  public async replaceTrack(
-    oldTrack: MediaStreamTrack,
-    newTrack: MediaStreamTrack,
-    stream: MediaStream
-  ): Promise<void> {
-    const results: Array<{ peerId: string; success: boolean; error?: Error }> = [];
-    
-    // 모든 피어에 대해 순차적으로 트랙 교체
-    for (const [peerId, peer] of this.peers.entries()) {
-      if (peer.destroyed) {
-        console.warn(`[WebRTC] Peer ${peerId} is destroyed, skipping`);
-        continue;
-      }
-      
-      try {
-        // Simple-peer의 replaceTrack 메서드 사용
-        await peer.replaceTrack(oldTrack, newTrack, stream);
-        
-        console.log(`[WebRTC] Track replaced successfully for peer ${peerId}`);
-        results.push({ peerId, success: true });
-        
-      } catch (error) {
-        console.error(`[WebRTC] Failed to replace track for peer ${peerId}:`, error);
-        
-        // Fallback: removeTrack + addTrack
-        try {
-          await peer.removeTrack(oldTrack, stream);
-          await peer.addTrack(newTrack, stream);
-          
-          console.log(`[WebRTC] Track replaced using fallback for peer ${peerId}`);
-          results.push({ peerId, success: true });
-          
-        } catch (fallbackError) {
-          console.error(`[WebRTC] Fallback also failed for peer ${peerId}:`, fallbackError);
-          results.push({
-            peerId,
-            success: false,
-            error: fallbackError as Error
-          });
-        }
-      }
-    }
-    
-    // 결과 요약
-    const successful = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success).length;
-    
-    console.log(
-      `[WebRTC] Track replacement complete: ${successful} succeeded, ${failed} failed`
-    );
-    
-    if (failed > 0) {
-      throw new Error(
-        `Track replacement failed for ${failed} peer(s): ${
-          results.filter(r => !r.success).map(r => r.peerId).join(', ')
-        }`
-      );
-    }
-  }
-
-  /**
-   * 트랙 추가 메서드
-   */
   public addTrackToAllPeers(track: MediaStreamTrack, stream: MediaStream): void {
     this.peers.forEach((peer, peerId) => {
       if (!peer.destroyed) {
         try {
           peer.addTrack(track, stream);
-          console.log(`[WebRTC] Track added to peer ${peerId}`);
+          console.log(`[WebRTC] Peer ${peerId}에 트랙 추가됨`);
         } catch (error) {
-          console.error(`[WebRTC] Failed to add track to peer ${peerId}:`, error);
+          console.error(`[WebRTC] Peer ${peerId} 트랙 추가 실패:`, error);
         }
       }
     });
   }
 
-  /**
-   * 트랙 제거 메서드
-   */
   public removeTrackFromAllPeers(track: MediaStreamTrack, stream: MediaStream): void {
     this.peers.forEach((peer, peerId) => {
       if (!peer.destroyed) {
         try {
           peer.removeTrack(track, stream);
-          console.log(`[WebRTC] Track removed from peer ${peerId}`);
+          console.log(`[WebRTC] Peer ${peerId}에서 트랙 제거됨`);
         } catch (error) {
-          console.error(`[WebRTC] Failed to remove track from peer ${peerId}:`, error);
+          console.error(`[WebRTC] Peer ${peerId} 트랙 제거 실패:`, error);
         }
       }
     });
   }
 
   public updateLocalStream(newStream: MediaStream | null): void {
-    // 이전 스트림 백업
     if (this.localStream) {
       this.streamBackup.set('previous', this.localStream);
     }
     
     this.localStream = newStream;
     
-    // 모든 피어에 새 스트림 적용
     this.peers.forEach((peer, peerId) => {
       if (!peer.destroyed) {
         try {
           if (newStream) {
             (peer as any).addStream?.(newStream);
           }
-          console.log(`[WebRTC] Updated stream for peer ${peerId}`);
+          console.log(`[WebRTC] Peer ${peerId} 스트림 업데이트됨`);
         } catch (error) {
-          console.error(`[WebRTC] Failed to update stream for peer ${peerId}:`, error);
+          console.error(`[WebRTC] Peer ${peerId} 스트림 업데이트 실패:`, error);
         }
       }
     });
   }
 
-  /**
-   * 이전 스트림 복원
-   */
   public restorePreviousStream(): MediaStream | null {
     const previousStream = this.streamBackup.get('previous');
     if (previousStream) {
@@ -426,7 +427,7 @@ export class WebRTCManager {
           peer.destroy();
         }
       } catch (error) {
-        console.warn(`[WebRTC] Error destroying peer ${peerId}:`, error);
+        console.warn(`[WebRTC] Peer ${peerId} 파괴 오류:`, error);
       }
     });
     this.peers.clear();
@@ -438,20 +439,20 @@ export class WebRTCManager {
     peer.on('signal', (signal) => this.events.onSignal(peerId, signal));
     peer.on('connect', () => this.events.onConnect(peerId));
     peer.on('stream', (stream) => {
-      console.log(`[WebRTC] Received stream from peer ${peerId}`);
+      console.log(`[WebRTC] Peer ${peerId}로부터 스트림 수신`);
       
       const videoTracks = stream.getVideoTracks();
       const audioTracks = stream.getAudioTracks();
       
       if (videoTracks.length > 0) {
-        console.log(`[WebRTC] Stream contains ${videoTracks.length} video track(s)`);
+        console.log(`[WebRTC] 비디오 트랙 ${videoTracks.length}개 포함`);
         if (videoTracks[0].label.includes('captureStream')) {
-          console.log(`[WebRTC] Detected file streaming from peer ${peerId}`);
+          console.log(`[WebRTC] Peer ${peerId}가 파일 스트리밍 중`);
         }
       }
       
       if (audioTracks.length > 0) {
-        console.log(`[WebRTC] Stream contains ${audioTracks.length} audio track(s)`);
+        console.log(`[WebRTC] 오디오 트랙 ${audioTracks.length}개 포함`);
       }
       
       this.events.onStream(peerId, stream);
@@ -463,16 +464,16 @@ export class WebRTCManager {
 
   private handlePeerError(peerId: string, error: Error): void {
     if (error.name === 'OperationError') {
-      console.warn(`[WebRTC] Non-fatal OperationError on peer (${peerId}). Flow control will handle it.`);
+      console.warn(`[WebRTC] Peer ${peerId} OperationError (비치명적). 흐름 제어가 처리합니다.`);
       return;
     }
 
     const retries = this.connectionRetries.get(peerId) || 0;
     if (retries < this.MAX_RETRIES) {
-      console.warn(`[WebRTC] Error on peer ${peerId}, retry ${retries + 1}/${this.MAX_RETRIES}:`, error.message);
+      console.warn(`[WebRTC] Peer ${peerId} 오류, 재시도 ${retries + 1}/${this.MAX_RETRIES}:`, error.message);
       this.connectionRetries.set(peerId, retries + 1);
     } else {
-      console.error(`[WebRTC] Unrecoverable fatal error on peer (${peerId}), removing peer:`, error);
+      console.error(`[WebRTC] Peer ${peerId} 치명적 오류, Peer 제거:`, error);
       this.events.onError(peerId, error);
     }
   }
