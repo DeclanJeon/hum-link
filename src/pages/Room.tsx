@@ -21,6 +21,7 @@ import { VideoLayout } from '@/components/VideoLayout';
 import { toast } from 'sonner';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
+import { useTurnCredentials } from '@/hooks/useTurnCredentials';
 
 const Room = () => {
   const navigate = useNavigate();
@@ -58,6 +59,8 @@ const Room = () => {
   
   // Room Orchestrator
   useRoomOrchestrator(roomParams);
+
+  useTurnCredentials()
   
   // 자동 숨김 컨트롤
   useAutoHideControls(isMobile ? 0 : 3000);
