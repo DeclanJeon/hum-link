@@ -66,7 +66,7 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
       socket.emit('join-room', { roomId, userId, nickname });
 
       console.log('[TurnCredentials] Requesting new credentials...');
-      socket.emit('request-turn-credentials');
+      socket.emit('request-turn-credentials', { roomId, userId });
       
       // 🔥 하트비트 시작 (30초마다)
       const heartbeatInterval = setInterval(() => {
