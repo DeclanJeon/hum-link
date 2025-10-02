@@ -1,4 +1,8 @@
-// frontend/src/stores/useMediaDeviceStore.ts
+/**
+ * @fileoverview 미디어 디바이스 상태 관리 Store
+ * @module stores/useMediaDeviceStore
+ */
+
 import { create } from 'zustand';
 import { usePeerConnectionStore } from './usePeerConnectionStore';
 import { useSignalingStore } from './useSignalingStore';
@@ -25,16 +29,12 @@ interface MediaDeviceState {
   isSharingScreen: boolean;
   originalVideoTrack: MediaStreamTrack | null;
   preShareVideoState: boolean | null;
-  // 모바일
   isMobile: boolean;
   cameraFacing: CameraFacing;
   hasMultipleCameras: boolean;
-  // 파일 스트리밍
   isFileStreaming: boolean;
   originalMediaState: OriginalMediaState | null;
-  // 카메라 전환 중
   isSwitchingCamera: boolean;
-  // 장치 변경 중
   isChangingDevice: boolean;
 }
 
@@ -43,14 +43,11 @@ interface MediaDeviceActions {
   toggleAudio: () => void;
   toggleVideo: () => void;
   toggleScreenShare: (toast: any) => Promise<void>;
-  // 모바일
   initializeMobileDetection: () => Promise<void>;
   switchCamera: () => Promise<void>;
-  // 파일 스트리밍
   saveOriginalMediaState: () => void;
   restoreOriginalMediaState: () => Promise<boolean>;
   setFileStreaming: (streaming: boolean) => void;
-  // 장치 변경 (통합)
   changeAudioDevice: (deviceId: string) => Promise<boolean>;
   changeVideoDevice: (deviceId: string) => Promise<boolean>;
   cleanup: () => void;
@@ -71,10 +68,14 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
   isSwitchingCamera: false,
   isChangingDevice: false,
 
+  /**
+   * 로컬 스트림 설정
+   */
   setLocalStream: (stream) => {
     console.log('[MediaDevice] Setting local stream:', {
       videoTracks: stream.getVideoTracks().length,
-      audioTracks: stream.getAudioTracks().length
+      audioTracks: stream.getAudioTracks().length,
+      streamId: stream.id
     });
     
     set({
@@ -87,6 +88,9 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     get().initializeMobileDetection();
   },
 
+  /**
+   * 모바일 디바이스 감지 및 카메라 정보 초기화
+   */
   initializeMobileDetection: async () => {
     const isMobile = cameraManager.isMobileDevice();
     const cameras = await cameraManager.detectCameras();
@@ -106,79 +110,106 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
   },
 
   /**
-   * 오디오 장치 변경 (Lobby + Room 공통)
+   * 오디오 디바이스 변경 (개선된 버전)
+   * Lobby와 Room 모두에서 사용 가능
    */
   changeAudioDevice: async (deviceId: string): Promise<boolean> => {
     const { localStream, isFileStreaming, isChangingDevice } = get();
     
     if (isChangingDevice) {
-      console.warn('[MediaDevice] 이미 장치 변경 중입니다');
+      console.warn('[MediaDevice] 이미 디바이스 변경 중');
       return false;
     }
     
     if (isFileStreaming) {
-      toast.warning('파일 스트리밍 중에는 장치를 변경할 수 없습니다');
+      toast.warning('파일 스트리밍 중에는 디바이스를 변경할 수 없습니다');
       return false;
     }
     
     if (!localStream) {
-      console.error('[MediaDevice] 로컬 스트림이 없습니다');
+      console.error('[MediaDevice] 로컬 스트림 없음');
       return false;
     }
     
     set({ isChangingDevice: true });
     
     try {
-      console.log(`[MediaDevice] 오디오 장치 변경 시작: ${deviceId.substring(0, 8)}`);
+      console.log(`[MediaDevice] 오디오 디바이스 변경 시작: ${deviceId.substring(0, 8)}`);
       
-      // 1. 새 오디오 트랙 획득
+      // 1. 새로운 오디오 트랙 생성
       const newAudioStream = await navigator.mediaDevices.getUserMedia({
         audio: { deviceId: { exact: deviceId } }
       });
       
       const newAudioTrack = newAudioStream.getAudioTracks()[0];
       if (!newAudioTrack) {
-        throw new Error('새 오디오 트랙을 얻지 못했습니다');
+        throw new Error('새 오디오 트랙 생성 실패');
       }
       
       const oldAudioTrack = localStream.getAudioTracks()[0];
+      const wasEnabled = get().isAudioEnabled;
       
-      // 2. WebRTC Peer Connection 업데이트 (Room에서만)
+      console.log('[MediaDevice] 오디오 트랙 정보:', {
+        oldTrack: oldAudioTrack ? {
+          id: oldAudioTrack.id,
+          label: oldAudioTrack.label,
+          enabled: oldAudioTrack.enabled
+        } : null,
+        newTrack: {
+          id: newAudioTrack.id,
+          label: newAudioTrack.label,
+          enabled: newAudioTrack.enabled
+        }
+      });
+      
+      // 2. WebRTC Peer Connection 트랙 교체 (Room에서만)
       const { webRTCManager } = usePeerConnectionStore.getState();
       if (webRTCManager && oldAudioTrack) {
         console.log('[MediaDevice] WebRTC Peer Connection 오디오 트랙 교체 중...');
         
         try {
-          // replaceTrack: 같은 localStream 객체 사용
-          await webRTCManager.replaceTrack(oldAudioTrack, newAudioTrack, localStream);
-          console.log('[MediaDevice] WebRTC replaceTrack 성공');
-        } catch (error) {
-          console.warn('[MediaDevice] replaceTrack 실패, fallback 시도:', error);
-          
-          // Fallback: removeTrack + addTrack
-          try {
-            await webRTCManager.removeTrackFromAllPeers(oldAudioTrack, localStream);
-            await webRTCManager.addTrackToAllPeers(newAudioTrack, localStream);
-            console.log('[MediaDevice] Fallback 트랙 교체 성공');
-          } catch (fallbackError) {
-            console.error('[MediaDevice] Fallback 실패:', fallbackError);
-            throw new Error('오디오 트랙 교체에 실패했습니다');
+          // WebRTCManager의 localStream에서 먼저 트랙 교체
+          const managerStream = webRTCManager.getLocalStream();
+          if (managerStream) {
+            const existingOldTrack = managerStream.getAudioTracks().find(
+              t => t.id === oldAudioTrack.id
+            );
+            
+            if (existingOldTrack) {
+              managerStream.removeTrack(existingOldTrack);
+              console.log('[MediaDevice] WebRTCManager localStream에서 이전 오디오 트랙 제거');
+            }
+            
+            managerStream.addTrack(newAudioTrack);
+            console.log('[MediaDevice] WebRTCManager localStream에 새 오디오 트랙 추가');
           }
+          
+          // Peer에 replaceTrack 호출
+          await webRTCManager.replaceTrack(oldAudioTrack, newAudioTrack);
+          console.log('[MediaDevice] WebRTC replaceTrack 완료');
+          
+        } catch (error) {
+          console.error('[MediaDevice] WebRTC 트랙 교체 실패:', error);
+          throw new Error('WebRTC 트랙 교체 실패');
         }
       }
       
-      // 3. 로컬 스트림 업데이트 (같은 객체 내에서 트랙 교체)
+      // 3. 로컬 스트림 트랙 교체 (Store의 localStream)
       if (oldAudioTrack) {
         localStream.removeTrack(oldAudioTrack);
-        oldAudioTrack.stop();
       }
       localStream.addTrack(newAudioTrack);
       
-      // 4. enabled 상태 유지
-      const wasEnabled = get().isAudioEnabled;
+      // 4. enabled 상태 적용
       newAudioTrack.enabled = wasEnabled;
       
-      // 5. Lobby Store 동기화 (Lobby에서 호출된 경우)
+      // 5. 이전 트랙 정리 (즉시)
+      if (oldAudioTrack && oldAudioTrack.readyState !== 'ended') {
+        oldAudioTrack.stop();
+        console.log('[MediaDevice] 이전 오디오 트랙 정지');
+      }
+      
+      // 6. Lobby Store 업데이트 (Lobby에서만)
       const { stream: lobbyStream } = useLobbyStore.getState();
       if (lobbyStream) {
         useLobbyStore.setState({ stream: localStream });
@@ -186,25 +217,39 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
         // 오디오 분석 재초기화
         const { initializeAudioAnalysis } = useLobbyStore.getState();
         initializeAudioAnalysis(localStream);
+        
+        console.log('[MediaDevice] Lobby 스트림 업데이트 및 오디오 분석 재초기화');
       }
       
-      // 6. Signaling 상태 전파 (Room에서만)
+      // 7. Signaling 업데이트 (Room에서만)
       if (webRTCManager) {
         useSignalingStore.getState().updateMediaState({
           kind: 'audio',
           enabled: wasEnabled
         });
+        console.log('[MediaDevice] Signaling 오디오 상태 업데이트');
       }
       
-      // 7. localStorage 저장
+      // 8. localStorage 저장
       localStorage.setItem('preferredAudioDevice', deviceId);
       
-      console.log('[MediaDevice] 오디오 장치 변경 완료');
+      console.log('[MediaDevice] 오디오 디바이스 변경 완료');
       return true;
       
-    } catch (error) {
-      console.error('[MediaDevice] 오디오 장치 변경 실패:', error);
-      toast.error('오디오 장치 변경 실패');
+    } catch (error: any) {
+      console.error('[MediaDevice] 오디오 디바이스 변경 실패:', error);
+      
+      // 에러 타입별 사용자 친화적 메시지
+      if (error.name === 'NotFoundError') {
+        toast.error('마이크를 찾을 수 없습니다');
+      } else if (error.name === 'NotAllowedError') {
+        toast.error('마이크 권한이 거부되었습니다');
+      } else if (error.message?.includes('WebRTC')) {
+        toast.error('연결된 참가자에게 마이크 변경을 전달하지 못했습니다');
+      } else {
+        toast.error('마이크 변경 실패');
+      }
+      
       return false;
     } finally {
       set({ isChangingDevice: false });
@@ -212,18 +257,19 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
   },
   
   /**
-   * 비디오 장치 변경 (Lobby + Room 공통)
+   * 비디오 디바이스 변경 (개선된 버전)
+   * Lobby와 Room 모두에서 사용 가능
    */
   changeVideoDevice: async (deviceId: string): Promise<boolean> => {
     const { localStream, isFileStreaming, isSharingScreen, isChangingDevice } = get();
     
     if (isChangingDevice) {
-      console.warn('[MediaDevice] 이미 장치 변경 중입니다');
+      console.warn('[MediaDevice] 이미 디바이스 변경 중');
       return false;
     }
     
     if (isFileStreaming) {
-      toast.warning('파일 스트리밍 중에는 장치를 변경할 수 없습니다');
+      toast.warning('파일 스트리밍 중에는 디바이스를 변경할 수 없습니다');
       return false;
     }
     
@@ -233,16 +279,16 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     }
     
     if (!localStream) {
-      console.error('[MediaDevice] 로컬 스트림이 없습니다');
+      console.error('[MediaDevice] 로컬 스트림 없음');
       return false;
     }
     
     set({ isChangingDevice: true });
     
     try {
-      console.log(`[MediaDevice] 비디오 장치 변경 시작: ${deviceId.substring(0, 8)}`);
+      console.log(`[MediaDevice] 비디오 디바이스 변경 시작: ${deviceId.substring(0, 8)}`);
       
-      // 1. 새 비디오 트랙 획득
+      // 1. 새로운 비디오 트랙 생성
       const newVideoStream = await navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: { exact: deviceId },
@@ -253,78 +299,111 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       
       const newVideoTrack = newVideoStream.getVideoTracks()[0];
       if (!newVideoTrack) {
-        throw new Error('새 비디오 트랙을 얻지 못했습니다');
+        throw new Error('새 비디오 트랙 생성 실패');
       }
       
       const oldVideoTrack = localStream.getVideoTracks()[0];
       const wasEnabled = oldVideoTrack?.enabled || false;
       
-      // 2. WebRTC Peer Connection 업데이트 (Room에서만)
+      console.log('[MediaDevice] 비디오 트랙 정보:', {
+        oldTrack: oldVideoTrack ? {
+          id: oldVideoTrack.id,
+          label: oldVideoTrack.label,
+          enabled: oldVideoTrack.enabled
+        } : null,
+        newTrack: {
+          id: newVideoTrack.id,
+          label: newVideoTrack.label,
+          enabled: newVideoTrack.enabled
+        }
+      });
+      
+      // 2. WebRTC Peer Connection 트랙 교체 (Room에서만)
       const { webRTCManager } = usePeerConnectionStore.getState();
       if (webRTCManager && oldVideoTrack) {
         console.log('[MediaDevice] WebRTC Peer Connection 비디오 트랙 교체 중...');
         
         try {
-          // replaceTrack: 같은 localStream 객체 사용
-          await webRTCManager.replaceTrack(oldVideoTrack, newVideoTrack, localStream);
-          console.log('[MediaDevice] WebRTC replaceTrack 성공');
-        } catch (error) {
-          console.warn('[MediaDevice] replaceTrack 실패, fallback 시도:', error);
-          
-          // Fallback: removeTrack + addTrack
-          try {
-            await webRTCManager.removeTrackFromAllPeers(oldVideoTrack, localStream);
-            await webRTCManager.addTrackToAllPeers(newVideoTrack, localStream);
-            console.log('[MediaDevice] Fallback 트랙 교체 성공');
-          } catch (fallbackError) {
-            console.error('[MediaDevice] Fallback 실패:', fallbackError);
-            throw new Error('비디오 트랙 교체에 실패했습니다');
+          // WebRTCManager의 localStream에서 먼저 트랙 교체
+          const managerStream = webRTCManager.getLocalStream();
+          if (managerStream) {
+            const existingOldTrack = managerStream.getVideoTracks().find(
+              t => t.id === oldVideoTrack.id
+            );
+            
+            if (existingOldTrack) {
+              managerStream.removeTrack(existingOldTrack);
+              console.log('[MediaDevice] WebRTCManager localStream에서 이전 비디오 트랙 제거');
+            }
+            
+            managerStream.addTrack(newVideoTrack);
+            console.log('[MediaDevice] WebRTCManager localStream에 새 비디오 트랙 추가');
           }
+          
+          // Peer에 replaceTrack 호출
+          await webRTCManager.replaceTrack(oldVideoTrack, newVideoTrack);
+          console.log('[MediaDevice] WebRTC replaceTrack 완료');
+          
+        } catch (error) {
+          console.error('[MediaDevice] WebRTC 트랙 교체 실패:', error);
+          throw new Error('WebRTC 트랙 교체 실패');
         }
       }
       
-      // 3. 로컬 스트림 업데이트 (같은 객체 내에서 트랙 교체)
+      // 3. 로컬 스트림 트랙 교체 (Store의 localStream)
       if (oldVideoTrack) {
         localStream.removeTrack(oldVideoTrack);
-        
-        // 이전 트랙 정리 (WebRTC 전파 후)
-        setTimeout(() => {
-          if (oldVideoTrack.readyState !== 'ended') {
-            oldVideoTrack.stop();
-          }
-        }, 500);
       }
       localStream.addTrack(newVideoTrack);
       
-      // 4. enabled 상태 유지
+      // 4. enabled 상태 적용
       newVideoTrack.enabled = wasEnabled;
       
-      // 5. Store 상태 업데이트
+      // 5. Store 업데이트
       set({ localStream });
       
-      // 6. Lobby Store 동기화 (Lobby에서 호출된 경우)
+      // 6. 이전 트랙 정리 (즉시)
+      if (oldVideoTrack && oldVideoTrack.readyState !== 'ended') {
+        oldVideoTrack.stop();
+        console.log('[MediaDevice] 이전 비디오 트랙 정지');
+      }
+      
+      // 7. Lobby Store 업데이트 (Lobby에서만)
       const { stream: lobbyStream } = useLobbyStore.getState();
       if (lobbyStream) {
         useLobbyStore.setState({ stream: localStream });
+        console.log('[MediaDevice] Lobby 스트림 업데이트');
       }
       
-      // 7. Signaling 상태 전파 (Room에서만)
+      // 8. Signaling 업데이트 (Room에서만)
       if (webRTCManager) {
         useSignalingStore.getState().updateMediaState({
           kind: 'video',
           enabled: wasEnabled
         });
+        console.log('[MediaDevice] Signaling 비디오 상태 업데이트');
       }
       
-      // 8. localStorage 저장
+      // 9. localStorage 저장
       localStorage.setItem('preferredVideoDevice', deviceId);
       
-      console.log('[MediaDevice] 비디오 장치 변경 완료');
+      console.log('[MediaDevice] 비디오 디바이스 변경 완료');
       return true;
       
-    } catch (error) {
-      console.error('[MediaDevice] 비디오 장치 변경 실패:', error);
-      toast.error('비디오 장치 변경 실패');
+    } catch (error: any) {
+      console.error('[MediaDevice] 비디오 디바이스 변경 실패:', error);
+      
+      // 에러 타입별 사용자 친화적 메시지
+      if (error.name === 'NotFoundError') {
+        toast.error('카메라를 찾을 수 없습니다');
+      } else if (error.name === 'NotAllowedError') {
+        toast.error('카메라 권한이 거부되었습니다');
+      } else if (error.message?.includes('WebRTC')) {
+        toast.error('연결된 참가자에게 카메라 변경을 전달하지 못했습니다');
+      } else {
+        toast.error('카메라 변경 실패');
+      }
+      
       return false;
     } finally {
       set({ isChangingDevice: false });
@@ -333,7 +412,7 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
 
   /**
    * 카메라 전환 (전면/후면)
-   * 핵심 수정: localStream 객체는 유지하고 트랙만 교체
+   * 모바일 디바이스에서만 사용 가능
    */
   switchCamera: async () => {
     const {
@@ -346,14 +425,14 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       isSwitchingCamera
     } = get();
     
-    // 1. 가드 체크
+    // 1. 유효성 검사
     if (isSwitchingCamera) {
-      console.log('[MediaDevice] 이미 카메라 전환 중입니다');
+      console.log('[MediaDevice] 이미 카메라 전환 중');
       return;
     }
     
     if (!isMobile || !hasMultipleCameras) {
-      toast.warning('전환 가능한 카메라가 없습니다');
+      toast.warning('모바일 디바이스가 아니거나 카메라가 하나뿐입니다');
       return;
     }
     
@@ -363,17 +442,17 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     }
     
     if (!localStream) {
-      toast.error('로컬 스트림이 없습니다');
+      toast.error('스트림 없음');
       return;
     }
     
-    // 2. 시작
+    // 2. 플래그 설정
     set({ isSwitchingCamera: true });
     
     try {
       const currentVideoTrack = localStream.getVideoTracks()[0];
       if (!currentVideoTrack) {
-        throw new Error('현재 비디오 트랙이 없습니다');
+        throw new Error('현재 비디오 트랙 없음');
       }
       
       const wasEnabled = currentVideoTrack.enabled;
@@ -383,10 +462,10 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       console.log(`[MediaDevice] 카메라 전환: ${currentFacing} → ${targetFacing}`);
       console.log(`[MediaDevice] 현재 트랙: enabled=${wasEnabled}, readyState=${currentVideoTrack.readyState}`);
       
-      // 3. 새 비디오 트랙만 캡처 (새 MediaStream은 트랙 소스일 뿐)
+      // 3. 새로운 카메라 스트림 생성 (facingMode 우선)
       let newVideoStream: MediaStream;
       try {
-        console.log('[MediaDevice] facingMode 방식으로 시도...');
+        console.log('[MediaDevice] facingMode 제약 조건 사용 중...');
         newVideoStream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: targetFacing },
@@ -398,14 +477,14 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       } catch (error: any) {
         console.warn('[MediaDevice] facingMode 실패, deviceId 방식으로 재시도:', error.message);
         
-        // Fallback: deviceId 방식
+        // Fallback: deviceId로 시도
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cameras = devices.filter(d => d.kind === 'videoinput');
         const currentDeviceId = currentVideoTrack.getSettings().deviceId;
         const nextCamera = cameras.find(cam => cam.deviceId !== currentDeviceId);
         
         if (!nextCamera) {
-          throw new Error('전환 가능한 다른 카메라를 찾지 못했습니다');
+          throw new Error('사용 가능한 다른 카메라가 없습니다');
         }
         
         console.log(`[MediaDevice] 다음 카메라 사용: ${nextCamera.label}`);
@@ -421,19 +500,27 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       
       const newVideoTrack = newVideoStream.getVideoTracks()[0];
       if (!newVideoTrack) {
-        throw new Error('새 비디오 트랙을 얻지 못했습니다');
+        throw new Error('새 비디오 트랙 생성 실패');
       }
       
-      console.log(`[MediaDevice] 새 트랙 획득: ${newVideoTrack.label}`);
+      console.log(`[MediaDevice] 새 비디오 트랙: ${newVideoTrack.label}`);
       
-      // 4. WebRTC replaceTrack: 반드시 기존 localStream을 넘긴다
+      // 4. WebRTC 트랙 교체
       const { webRTCManager } = usePeerConnectionStore.getState();
       if (webRTCManager) {
         console.log('[MediaDevice] WebRTC 트랙 교체 중...');
         
         try {
-          // 핵심: stream 인자는 기존 localStream (Peer에 추가된 스트림)
-          await webRTCManager.replaceTrack(currentVideoTrack, newVideoTrack, localStream);
+          // WebRTCManager의 localStream에서 먼저 트랙 교체
+          const managerStream = webRTCManager.getLocalStream();
+          if (managerStream) {
+            managerStream.removeTrack(currentVideoTrack);
+            managerStream.addTrack(newVideoTrack);
+            console.log('[MediaDevice] WebRTCManager localStream 트랙 교체 완료');
+          }
+          
+          // Peer에 replaceTrack 호출
+          await webRTCManager.replaceTrack(currentVideoTrack, newVideoTrack);
           console.log('[MediaDevice] WebRTC 트랙 교체 성공');
         } catch (error) {
           console.error('[MediaDevice] WebRTC 트랙 교체 실패:', error);
@@ -441,40 +528,36 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
         }
       }
       
-      // 5. 같은 localStream 객체 내에서 트랙 교체
+      // 5. 로컬 스트림 트랙 교체
       console.log('[MediaDevice] 로컬 스트림 트랙 교체 중...');
       localStream.removeTrack(currentVideoTrack);
       localStream.addTrack(newVideoTrack);
       newVideoTrack.enabled = wasEnabled;
       
-      // 6. 상태 업데이트 (스트림 객체는 유지)
+      // 6. 상태 업데이트 (즉시 반영)
       set({
         cameraFacing: targetFacing,
         isVideoEnabled: wasEnabled
       });
       
-      // 7. CameraManager 상태 업데이트
+      // 7. CameraManager 업데이트
       cameraManager.setCurrentFacing(targetFacing);
       
-      // 8. Lobby 미리보기는 같은 객체(localStream)를 들고 있으므로 별도 동기화 불필요
-      
-      // 9. Signaling로 상태 전파
+      // 8. Signaling 업데이트
       useSignalingStore.getState().updateMediaState({
         kind: 'video',
         enabled: wasEnabled
       });
       
-      // 10. 이전 트랙 정리 (약간 지연 후 정지)
-      setTimeout(() => {
-        if (currentVideoTrack.readyState !== 'ended') {
-          currentVideoTrack.stop();
-          console.log('[MediaDevice] 이전 트랙 정지 완료');
-        }
-      }, 300);
+      // 9. 이전 트랙 정리 (즉시)
+      if (currentVideoTrack.readyState !== 'ended') {
+        currentVideoTrack.stop();
+        console.log('[MediaDevice] 이전 비디오 트랙 정지');
+      }
       
-      // 11. 사용자 피드백
+      // 10. 사용자 피드백
       toast.success(
-        `${targetFacing === 'user' ? '전면' : '후면'} 카메라로 전환했습니다`,
+        `${targetFacing === 'user' ? '전면' : '후면'} 카메라로 전환`,
         { duration: 1500, position: 'top-center' }
       );
       
@@ -482,11 +565,19 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       
     } catch (error: any) {
       console.error('[MediaDevice] 카메라 전환 실패:', error);
-      toast.error(`카메라 전환 실패: ${error.message || error}`);
+      
+      // 에러 타입별 사용자 친화적 메시지
+      if (error.name === 'NotFoundError') {
+        toast.error('카메라를 찾을 수 없습니다');
+      } else if (error.name === 'NotAllowedError') {
+        toast.error('카메라 권한이 필요합니다');
+      } else {
+        toast.error(`카메라 전환 실패: ${error.message || error}`);
+      }
       
       // 롤백 시도
       try {
-        console.log('[MediaDevice] 롤백 시도 중...');
+        console.log('[MediaDevice] 카메라 전환 롤백 시도...');
         const { webRTCManager } = usePeerConnectionStore.getState();
         if (webRTCManager && localStream) {
           const track = localStream.getVideoTracks()[0];
@@ -504,11 +595,14 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     }
   },
 
+  /**
+   * 오디오 토글
+   */
   toggleAudio: () => {
     const { isFileStreaming, isAudioEnabled, localStream } = get();
     
     if (isFileStreaming) {
-      toast.warning('파일 스트리밍 중에는 오디오를 제어할 수 없습니다');
+      toast.warning('파일 스트리밍 중에는 마이크를 제어할 수 없습니다');
       return;
     }
     
@@ -520,6 +614,9 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     console.log('[MediaDevice] Audio toggled:', enabled);
   },
 
+  /**
+   * 비디오 토글
+   */
   toggleVideo: () => {
     const { isVideoEnabled, isSharingScreen, localStream, isFileStreaming } = get();
     
@@ -538,17 +635,20 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     console.log('[MediaDevice] Video toggled:', enabled);
   },
 
+  /**
+   * 화면 공유 토글
+   */
   toggleScreenShare: async (toast: any) => {
     const { isSharingScreen, localStream, originalVideoTrack, isVideoEnabled, preShareVideoState, isFileStreaming } = get();
     const { webRTCManager } = usePeerConnectionStore.getState();
 
     if (isFileStreaming) {
-      toast.warning('파일 스트리밍 중에는 화면 공유를 할 수 없습니다');
+      toast.warning('파일 스트리밍 중에는 화면 공유를 시작할 수 없습니다');
       return;
     }
 
     if (!webRTCManager) {
-      toast.error('WebRTC 매니저가 초기화되지 않았습니다');
+      toast.error('WebRTC 초기화 안됨');
       return;
     }
 
@@ -556,7 +656,18 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       // 화면 공유 중지
       if (originalVideoTrack && localStream) {
         const screenTrack = localStream.getVideoTracks()[0];
-        webRTCManager.replaceTrack(screenTrack, originalVideoTrack, localStream);
+        
+        // WebRTCManager의 localStream에서 먼저 트랙 교체
+        const managerStream = webRTCManager.getLocalStream();
+        if (managerStream) {
+          managerStream.removeTrack(screenTrack);
+          managerStream.addTrack(originalVideoTrack);
+        }
+        
+        // Peer에 replaceTrack 호출
+        webRTCManager.replaceTrack(screenTrack, originalVideoTrack);
+        
+        // 로컬 스트림 트랙 교체
         localStream.removeTrack(screenTrack);
         localStream.addTrack(originalVideoTrack);
         screenTrack.stop();
@@ -572,7 +683,7 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
         });
         
         useSignalingStore.getState().updateMediaState({ kind: 'video', enabled: wasVideoEnabledBeforeShare });
-        toast.info("화면 공유를 중지했습니다.");
+        toast.info("화면 공유 중지됨.");
         
         console.log('[MediaDevice] Screen share stopped');
       }
@@ -589,7 +700,17 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
             preShareVideoState: isVideoEnabled
           });
 
-          webRTCManager.replaceTrack(currentVideoTrack, screenTrack, localStream);
+          // WebRTCManager의 localStream에서 먼저 트랙 교체
+          const managerStream = webRTCManager.getLocalStream();
+          if (managerStream) {
+            managerStream.removeTrack(currentVideoTrack);
+            managerStream.addTrack(screenTrack);
+          }
+          
+          // Peer에 replaceTrack 호출
+          webRTCManager.replaceTrack(currentVideoTrack, screenTrack);
+          
+          // 로컬 스트림 트랙 교체
           localStream.removeTrack(currentVideoTrack);
           localStream.addTrack(screenTrack);
           
@@ -601,22 +722,25 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
               get().toggleScreenShare(toast);
             }
           };
-          toast.success("화면 공유를 시작했습니다.");
+          toast.success("화면 공유 시작됨.");
           
           console.log('[MediaDevice] Screen share started');
         }
       } catch (error) {
-        console.error("[MediaDevice] 화면 공유 실패:", error);
-        toast.error("화면 공유를 시작할 수 없습니다. 권한을 확인하세요.");
+        console.error("[MediaDevice] 화면 공유 시작 실패:", error);
+        toast.error("화면 공유 시작 실패. 다시 시도해주세요.");
       }
     }
   },
 
+  /**
+   * 원본 미디어 상태 저장 (파일 스트리밍 전)
+   */
   saveOriginalMediaState: () => {
     const { localStream, isAudioEnabled, isVideoEnabled, isSharingScreen } = get();
     
     if (!localStream) {
-      console.warn('[MediaDevice] 저장할 스트림이 없습니다');
+      console.warn('[MediaDevice] 로컬 스트림이 없어 상태를 저장할 수 없습니다');
       return;
     }
     
@@ -637,7 +761,7 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     
     set({ originalMediaState: state });
     
-    console.log('[MediaDevice] 미디어 상태 저장:', {
+    console.log('[MediaDevice] 원본 미디어 상태 저장:', {
       isAudioEnabled: state.isAudioEnabled,
       isVideoEnabled: state.isVideoEnabled,
       audioTrackEnabled: state.audioTrackEnabled,
@@ -647,6 +771,9 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
     });
   },
 
+  /**
+   * 원본 미디어 상태 복원 (파일 스트리밍 후)
+   */
   restoreOriginalMediaState: async () => {
     const { originalMediaState, localStream } = get();
     
@@ -655,7 +782,7 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       return false;
     }
     
-    console.log('[MediaDevice] 미디어 상태 복원 중...');
+    console.log('[MediaDevice] 원본 미디어 상태 복원 중...');
     
     try {
       // 1. 오디오 복원
@@ -684,7 +811,7 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       updateMediaState({ kind: 'audio', enabled: originalMediaState.isAudioEnabled });
       updateMediaState({ kind: 'video', enabled: originalMediaState.isVideoEnabled });
       
-      console.log('[MediaDevice] 미디어 상태 복원 완료:', {
+      console.log('[MediaDevice] 원본 미디어 상태 복원 완료:', {
         isAudioEnabled: originalMediaState.isAudioEnabled,
         isVideoEnabled: originalMediaState.isVideoEnabled,
         audioTrackEnabled: originalMediaState.audioTrackEnabled,
@@ -693,17 +820,23 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       
       return true;
     } catch (error) {
-      console.error('[MediaDevice] 미디어 상태 복원 실패:', error);
+      console.error('[MediaDevice] 원본 미디어 상태 복원 실패:', error);
       set({ originalMediaState: null, isFileStreaming: false });
       return false;
     }
   },
 
+  /**
+   * 파일 스트리밍 상태 설정
+   */
   setFileStreaming: (streaming: boolean) => {
     set({ isFileStreaming: streaming });
     console.log(`[MediaDevice] 파일 스트리밍 상태: ${streaming}`);
   },
 
+  /**
+   * 정리 (cleanup)
+   */
   cleanup: () => {
     console.log('[MediaDevice] Cleaning up...');
     

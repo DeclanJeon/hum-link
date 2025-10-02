@@ -1,3 +1,8 @@
+/**
+ * @fileoverview 미디어 디바이스 감지 및 Fallback 처리
+ * @module lib/mediaCapabilityDetector
+ */
+
 import { toast } from 'sonner';
 
 export interface MediaCapabilities {
@@ -20,6 +25,9 @@ export interface StreamCreationResult {
   warnings: string[];
 }
 
+/**
+ * 미디어 디바이스 감지 및 Fallback 처리 클래스 (Singleton)
+ */
 export class MediaCapabilityDetector {
   private static instance: MediaCapabilityDetector;
   private cachedCapabilities: MediaCapabilities | null = null;
@@ -35,6 +43,9 @@ export class MediaCapabilityDetector {
     return MediaCapabilityDetector.instance;
   }
 
+  /**
+   * 미디어 디바이스 감지
+   */
   public async detectCapabilities(forceRefresh: boolean = false): Promise<MediaCapabilities> {
     if (this.cachedCapabilities && !forceRefresh) {
       return this.cachedCapabilities;
@@ -54,7 +65,7 @@ export class MediaCapabilityDetector {
     };
 
     try {
-      // 권한 요청 없이 디바이스 확인
+      // 디바이스 목록 가져오기
       const devices = await navigator.mediaDevices.enumerateDevices();
       
       capabilities.cameras = devices.filter(d => d.kind === 'videoinput');
@@ -65,7 +76,7 @@ export class MediaCapabilityDetector {
       capabilities.hasMicrophone = capabilities.microphones.length > 0;
       capabilities.hasSpeaker = capabilities.speakers.length > 0;
       
-      // 화면 공유 지원 확인
+      // 화면 공유 지원 여부
       capabilities.canShareScreen = !!(navigator.mediaDevices as any).getDisplayMedia;
       
       console.log('[MediaCapability] Detected capabilities:', capabilities);
@@ -77,6 +88,9 @@ export class MediaCapabilityDetector {
     return capabilities;
   }
 
+  /**
+   * Constraints에 맞는 스트림 획득 (Fallback 포함)
+   */
   public async getConstrainedStream(
     preferred: MediaStreamConstraints,
     showWarnings: boolean = true
@@ -84,11 +98,11 @@ export class MediaCapabilityDetector {
     const capabilities = await this.detectCapabilities();
     const warnings: string[] = [];
     
-    // 요청된 미디어와 실제 능력 비교
+    // 요청된 미디어 타입
     const requestsVideo = preferred.video !== false;
     const requestsAudio = preferred.audio !== false;
     
-    // 폴백 전략 순서
+    // 시도할 전략 목록
     const strategies: Array<{ constraints: MediaStreamConstraints | null; description: string }> = [
       {
         constraints: preferred,
@@ -96,7 +110,7 @@ export class MediaCapabilityDetector {
       }
     ];
 
-    // 비디오만 없는 경우
+    // 카메라 없음
     if (requestsVideo && !capabilities.hasCamera) {
       warnings.push('Camera not available');
       strategies.push({
@@ -105,7 +119,7 @@ export class MediaCapabilityDetector {
       });
     }
 
-    // 오디오만 없는 경우
+    // 마이크 없음
     if (requestsAudio && !capabilities.hasMicrophone) {
       warnings.push('Microphone not available');
       strategies.push({
@@ -114,7 +128,7 @@ export class MediaCapabilityDetector {
       });
     }
 
-    // 둘 다 없는 경우
+    // 둘 다 없음
     if (!capabilities.hasCamera && !capabilities.hasMicrophone) {
       strategies.push({
         constraints: null,
@@ -122,7 +136,7 @@ export class MediaCapabilityDetector {
       });
     }
 
-    // 전략 실행
+    // 전략 순회
     for (const strategy of strategies) {
       if (strategy.constraints === null) {
         console.log('[MediaCapability] Creating dummy stream');
@@ -154,13 +168,21 @@ export class MediaCapabilityDetector {
           isDummy: false,
           warnings
         };
-      } catch (error) {
+      } catch (error: any) {
         console.warn(`[MediaCapability] Strategy failed: ${strategy.description}`, error);
+        
+        // NotAllowedError는 즉시 중단 (사용자가 권한 거부)
+        if (error.name === 'NotAllowedError') {
+          console.error('[MediaCapability] User denied permission, stopping attempts');
+          warnings.push('Permission denied by user');
+          break;
+        }
+        
         continue;
       }
     }
 
-    // 모든 전략 실패 시 더미 스트림
+    // 모든 전략 실패 시 더미 스트림 생성
     console.log('[MediaCapability] All strategies failed, creating dummy stream');
     const dummyStream = await this.createDummyStream(requestsVideo, requestsAudio);
     
@@ -172,6 +194,9 @@ export class MediaCapabilityDetector {
     };
   }
 
+  /**
+   * 더미 스트림 생성 (카메라/마이크 없을 때)
+   */
   private async createDummyStream(includeVideo: boolean, includeAudio: boolean): Promise<MediaStream> {
     const tracks: MediaStreamTrack[] = [];
 
@@ -188,31 +213,34 @@ export class MediaCapabilityDetector {
     return new MediaStream(tracks);
   }
 
+  /**
+   * 더미 비디오 트랙 생성
+   */
   private createDummyVideoTrack(): MediaStreamTrack {
     const canvas = document.createElement('canvas');
     canvas.width = 640;
     canvas.height = 480;
     const ctx = canvas.getContext('2d')!;
     
-    // 애니메이션 프레임 ID
+    // 애니메이션 ID
     let animationId: number;
     let hue = 0;
     
     const animate = () => {
-      // 그라데이션 배경
+      // 배경 그라데이션
       const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
       gradient.addColorStop(0, `hsl(${hue}, 20%, 10%)`);
       gradient.addColorStop(1, `hsl(${hue + 60}, 20%, 15%)`);
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       
-      // 중앙 아이콘과 텍스트
+      // 텍스트 스타일
       ctx.fillStyle = '#666';
       ctx.font = 'bold 24px Inter, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       
-      // 카메라 아이콘 (간단한 도형으로)
+      // 카메라 아이콘 (간단한 도형)
       ctx.strokeStyle = '#666';
       ctx.lineWidth = 3;
       const centerX = canvas.width / 2;
@@ -240,7 +268,7 @@ export class MediaCapabilityDetector {
     const stream = (canvas as any).captureStream(30); // 30 FPS
     const track = stream.getVideoTracks()[0];
     
-    // 트랙이 종료될 때 애니메이션 정리
+    // 트랙 정지 시 애니메이션도 중지
     const originalStop = track.stop.bind(track);
     track.stop = () => {
       cancelAnimationFrame(animationId);
@@ -250,13 +278,16 @@ export class MediaCapabilityDetector {
     return track;
   }
 
+  /**
+   * 더미 오디오 트랙 생성 (무음)
+   */
   private createDummyAudioTrack(): MediaStreamTrack {
     if (!this.dummyAudioContext) {
       this.dummyAudioContext = new AudioContext();
       this.dummyOscillator = this.dummyAudioContext.createOscillator();
       const gainNode = this.dummyAudioContext.createGain();
       
-      // 완전 무음
+      // 무음 처리
       gainNode.gain.value = 0;
       this.dummyOscillator.connect(gainNode);
       
@@ -271,6 +302,9 @@ export class MediaCapabilityDetector {
     return destination.stream.getAudioTracks()[0];
   }
 
+  /**
+   * 정리 (cleanup)
+   */
   public cleanup(): void {
     if (this.dummyOscillator) {
       this.dummyOscillator.stop();
@@ -284,5 +318,5 @@ export class MediaCapabilityDetector {
   }
 }
 
-// 싱글톤 인스턴스 export
+// 싱글톤 export
 export const mediaCapabilityDetector = MediaCapabilityDetector.getInstance();

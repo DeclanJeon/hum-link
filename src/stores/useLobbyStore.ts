@@ -1,4 +1,8 @@
-// frontend/src/stores/useLobbyStore.ts
+/**
+ * @fileoverview 로비 상태 관리 Store
+ * @module stores/useLobbyStore
+ */
+
 import { create } from 'zustand';
 import { produce } from 'immer';
 import { mediaCapabilityDetector, MediaCapabilities } from '@/lib/mediaCapabilityDetector';
@@ -26,6 +30,7 @@ interface LobbyState {
   isDummyStream: boolean;
   streamWarnings: string[];
   deviceChangeHandler?: (ev: Event) => void;
+  animationFrameId?: number;
 }
 
 interface LobbyActions {
@@ -41,6 +46,9 @@ interface LobbyActions {
   cleanup: () => void;
 }
 
+/**
+ * 랜덤 닉네임 생성
+ */
 const generateRandomNickname = () => {
   const { adjectives, animals } = nicknamesData;
   const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
@@ -64,7 +72,11 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   isDummyStream: false,
   streamWarnings: [],
   deviceChangeHandler: undefined,
+  animationFrameId: undefined,
 
+  /**
+   * 로비 초기화
+   */
   initialize: async (roomTitle, nickname, navigate, toast) => {
     const finalNickname = nickname || generateRandomNickname();
     set({ connectionDetails: { roomTitle: decodeURIComponent(roomTitle), nickname: finalNickname } });
@@ -72,23 +84,25 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   },
 
   /**
-   * 미디어 초기화 - 단일 소스 원칙 적용
+   * 미디어 초기화 (개선된 버전)
+   * - 권한 요청 실패 시에도 디바이스 목록 표시
+   * - 스트림 획득 후 디바이스 목록 갱신 보장
    */
   initializeMedia: async (toast: any) => {
     try {
       console.log('[Lobby] Starting media initialization...');
       
-      // 1. 먼저 capability 감지
+      // 1. 미디어 capability 감지
       const capabilities = await mediaCapabilityDetector.detectCapabilities();
       set({ mediaCapabilities: capabilities });
 
-      // 2. 선호 장치 ID 가져오기 (localStorage)
+      // 2. 선호 디바이스 ID 로드 (localStorage)
       const preferredAudioDevice = localStorage.getItem("preferredAudioDevice") || "";
       const preferredVideoDevice = localStorage.getItem("preferredVideoDevice") || "";
 
       console.log('[Lobby] Preferred devices:', { 
-        audio: preferredAudioDevice, 
-        video: preferredVideoDevice 
+        audio: preferredAudioDevice.substring(0, 8), 
+        video: preferredVideoDevice.substring(0, 8)
       });
 
       // 3. Constraints 구성
@@ -105,35 +119,54 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
           : { width: { ideal: 1280 }, height: { ideal: 720 } }
       };
 
-      // 4. 스트림 획득 (권한 요청 포함)
-      const result = await mediaCapabilityDetector.getConstrainedStream(constraints, true);
+      // 4. 스트림 획득 (선호 디바이스 실패 시 기본 디바이스로 재시도)
+      let result;
+      try {
+        result = await mediaCapabilityDetector.getConstrainedStream(constraints, true);
+      } catch (error) {
+        console.warn('[Lobby] Preferred device failed, trying default:', error);
+        
+        // Fallback: 기본 디바이스로 재시도
+        result = await mediaCapabilityDetector.getConstrainedStream(
+          { audio: true, video: true },
+          true
+        );
+      }
       
       console.log('[Lobby] Stream obtained:', {
         isDummy: result.isDummy,
         warnings: result.warnings,
         videoTracks: result.stream.getVideoTracks().length,
-        audioTracks: result.stream.getAudioTracks().length
+        audioTracks: result.stream.getAudioTracks().length,
+        streamId: result.stream.id
       });
 
-      // 5. 단일 소스: MediaDeviceStore에 동일 스트림 주입
+      // 5. 스트림 주입: MediaDeviceStore로 전달
       const mediaDeviceStore = useMediaDeviceStore.getState();
       mediaDeviceStore.setLocalStream(result.stream);
       
       console.log('[Lobby] Stream injected to MediaDeviceStore');
 
-      // 6. Lobby도 같은 객체 참조
+      // 6. Lobby 상태 업데이트
       set({
         stream: result.stream,
         isDummyStream: result.isDummy,
         streamWarnings: result.warnings,
       });
 
-      // 7. 권한 부여 이후 재-열거 및 선택 장치 동기화
+      // 7. 디바이스 목록 갱신 (권한 획득 후 대기 시간 추가)
+      await new Promise(resolve => setTimeout(resolve, 100)); // 권한 적용 대기
       await get().refreshDevices();
       
       console.log('[Lobby] Devices refreshed after stream acquisition');
 
-      // 8. devicechange 리스너 등록
+      // 8. devicechange 이벤트 리스너 등록 (중복 방지)
+      const existingHandler = get().deviceChangeHandler;
+      if (existingHandler) {
+        navigator.mediaDevices.removeEventListener('devicechange', existingHandler);
+        console.log('[Lobby] Removed existing device change listener');
+      }
+      
       const handler = () => {
         console.log('[Lobby] Device change detected, refreshing...');
         get().refreshDevices();
@@ -143,7 +176,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
       
       console.log('[Lobby] Device change listener registered');
 
-      // 9. 오디오 레벨 분석 초기화 (마이크 있을 때만)
+      // 9. 오디오 분석 초기화 (마이크가 있고 활성화된 경우)
       if (result.capabilities.hasMicrophone && get().isAudioEnabled) {
         get().initializeAudioAnalysis(result.stream);
         console.log('[Lobby] Audio analysis initialized');
@@ -151,17 +184,17 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
 
       // 10. 사용자 피드백
       if (result.isDummy) {
-        toast.info("실제 장치를 찾지 못했습니다. 더미 스트림을 사용합니다.");
+        toast.info("카메라/마이크를 사용할 수 없습니다. 수신 전용 모드입니다.");
       } else if (result.warnings.length > 0) {
-        toast.warning(`경고: ${result.warnings.join(', ')}`);
+        toast.warning(`주의: ${result.warnings.join(', ')}`);
       } else {
-        toast.success("미디어 준비 완료!");
+        toast.success("준비 완료!");
       }
       
     } catch (error) {
       console.error("[Lobby] Media initialization error:", error);
       
-      // Fallback: 더미 스트림
+      // Fallback: 더미 스트림 생성 (권한 없어도 진행)
       try {
         const dummyResult = await mediaCapabilityDetector.getConstrainedStream(
           { audio: true, video: true },
@@ -173,21 +206,24 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
         set({
           stream: dummyResult.stream,
           isDummyStream: true,
-          streamWarnings: ['실제 장치를 사용할 수 없어 더미 스트림을 사용합니다.']
+          streamWarnings: ['디바이스 접근 권한이 필요합니다.']
         });
         
-        toast.error("장치를 초기화하지 못했습니다. 더미 스트림으로 진행합니다.");
+        // 더미 스트림이라도 디바이스 목록은 표시 (레이블 없음)
+        await get().refreshDevices();
+        
+        toast.error("미디어 접근 실패. 수신 전용 모드입니다.");
       } catch (fallbackError) {
         console.error("[Lobby] Fallback also failed:", fallbackError);
-        toast.error("미디어 초기화에 완전히 실패했습니다.");
+        toast.error("미디어 초기화 실패.");
       }
     }
   },
 
   /**
-   * 권한 부여 후/디바이스 변경 시 재-열거
-   * - 라벨/ID 정상화
-   * - 선택 장치 ID를 실제 트랙과 동기화
+   * 디바이스 목록 갱신 (개선된 버전)
+   * - 현재 사용 중인 디바이스 ID를 우선 선택
+   * - 권한이 없어도 디바이스 목록은 표시 (레이블 없음)
    */
   refreshDevices: async () => {
     try {
@@ -201,7 +237,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
         video: devices.filter(d => d.kind === 'videoinput').length
       });
 
-      // default 제외하고 실제 장치만 필터링
+      // default 디바이스 제외 (중복 방지)
       const audioDevices = devices.filter(
         d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default'
       );
@@ -214,7 +250,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
         video: videoDevices.map(d => ({ id: d.deviceId.substring(0, 8), label: d.label }))
       });
 
-      // 현재 활성 트랙에서 실제 선택된 디바이스 ID 가져오기
+      // 현재 사용 중인 디바이스 ID 가져오기
       const stream = get().stream || useMediaDeviceStore.getState().localStream;
       const currentAudioId = stream?.getAudioTracks()[0]?.getSettings().deviceId || '';
       const currentVideoId = stream?.getVideoTracks()[0]?.getSettings().deviceId || '';
@@ -224,7 +260,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
         video: currentVideoId.substring(0, 8)
       });
 
-      // 선택된 장치 ID 설정 (우선순위: 실제 트랙 > 기존 선택 > 첫 번째 장치)
+      // 선택된 디바이스 ID 결정 (우선순위: 현재 사용 중 > 기존 선택 > 첫 번째 디바이스)
       const finalAudioId = currentAudioId || get().selectedAudioDevice || (audioDevices[0]?.deviceId ?? '');
       const finalVideoId = currentVideoId || get().selectedVideoDevice || (videoDevices[0]?.deviceId ?? '');
 
@@ -237,7 +273,9 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
       
       console.log('[Lobby] Device refresh complete:', {
         selectedAudio: finalAudioId.substring(0, 8),
-        selectedVideo: finalVideoId.substring(0, 8)
+        selectedVideo: finalVideoId.substring(0, 8),
+        audioCount: audioDevices.length,
+        videoCount: videoDevices.length
       });
       
     } catch (error) {
@@ -245,6 +283,9 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     }
   },
 
+  /**
+   * 오디오 분석 초기화
+   */
   initializeAudioAnalysis: (stream: MediaStream) => {
     const audioTracks = stream.getAudioTracks();
     if (audioTracks.length === 0) {
@@ -269,8 +310,10 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
           currentAnalyser.getByteFrequencyData(dataArray);
           const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
           set({ audioLevel: average / 255 });
+          
+          const frameId = requestAnimationFrame(updateAudioLevel);
+          set({ animationFrameId: frameId });
         }
-        requestAnimationFrame(updateAudioLevel);
       };
       
       updateAudioLevel();
@@ -280,6 +323,9 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     }
   },
 
+  /**
+   * 오디오 토글
+   */
   toggleAudio: () => {
     const { isAudioEnabled, stream, mediaCapabilities } = get();
     
@@ -298,11 +344,14 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     console.log('[Lobby] Audio toggled:', newState);
   },
 
+  /**
+   * 비디오 토글
+   */
   toggleVideo: async (toast: any) => {
     const { isVideoEnabled, stream, mediaCapabilities } = get();
     
     if (!mediaCapabilities?.hasCamera) {
-      toast.warning("카메라를 사용할 수 없습니다");
+      toast.warning("카메라가 없습니다");
       return;
     }
     
@@ -317,7 +366,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   },
 
   /**
-   * 오디오 장치 변경 (MediaDeviceStore 통합)
+   * 오디오 디바이스 변경 (MediaDeviceStore 사용)
    */
   setSelectedAudioDevice: async (deviceId: string, toast: any) => {
     console.log('[Lobby] Changing audio device to:', deviceId.substring(0, 8));
@@ -339,7 +388,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
   },
   
   /**
-   * 비디오 장치 변경 (MediaDeviceStore 통합)
+   * 비디오 디바이스 변경 (MediaDeviceStore 사용)
    */
   setSelectedVideoDevice: async (deviceId: string, toast: any) => {
     console.log('[Lobby] Changing video device to:', deviceId.substring(0, 8));
@@ -360,26 +409,38 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
     }
   },
   
+  /**
+   * 오디오 레벨 설정
+   */
   setAudioLevel: (level: number) => set({ audioLevel: level }),
 
+  /**
+   * 정리 (cleanup)
+   */
   cleanup: () => {
     console.log('[Lobby] Cleaning up...');
     
-    const { stream, audioContext, deviceChangeHandler } = get();
+    const { stream, audioContext, deviceChangeHandler, animationFrameId } = get();
     
-    // 스트림 정리
+    // 스트림 정지
     stream?.getTracks().forEach(track => {
       track.stop();
       console.log('[Lobby] Stopped track:', track.kind, track.label);
     });
     
-    // 오디오 컨텍스트 정리
+    // 오디오 컨텍스트 닫기
     audioContext?.close();
     
     // 이벤트 리스너 제거
     if (deviceChangeHandler) {
       navigator.mediaDevices.removeEventListener('devicechange', deviceChangeHandler);
       console.log('[Lobby] Device change listener removed');
+    }
+    
+    // 애니메이션 프레임 취소
+    if (animationFrameId !== undefined) {
+      cancelAnimationFrame(animationFrameId);
+      console.log('[Lobby] Animation frame cancelled');
     }
     
     // MediaCapabilityDetector 정리
@@ -397,6 +458,7 @@ export const useLobbyStore = create<LobbyState & LobbyActions>((set, get) => ({
       isDummyStream: false,
       streamWarnings: [],
       deviceChangeHandler: undefined,
+      animationFrameId: undefined,
     });
     
     console.log('[Lobby] Cleanup complete');
