@@ -14,7 +14,7 @@ interface PeerInfo {
   nickname: string;
 }
 
-interface SignalingEvents {
+export interface SignalingEvents {
   onConnect: () => void;
   onDisconnect: () => void;
   onRoomUsers: (users: PeerInfo[]) => void;

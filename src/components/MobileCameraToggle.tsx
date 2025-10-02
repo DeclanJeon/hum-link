@@ -1,4 +1,8 @@
-// frontend/src/components/MobileCameraToggle.tsx
+/**
+ * @fileoverview 모바일 카메라 전환 토글
+ * @module components/MobileCameraToggle
+ */
+
 import { Button } from "@/components/ui/button";
 import { RotateCw, Loader2 } from "lucide-react";
 import { useMediaDeviceStore } from "@/stores/useMediaDeviceStore";
@@ -7,18 +11,17 @@ import { useIsMobile } from "@/hooks/use-mobile";
 export const MobileCameraToggle = () => {
   const { 
     isMobile, 
-    hasMultipleCameras, 
-    cameraFacing, 
-    switchCamera, 
-    isSharingScreen,
+    videoInputs,
     isVideoEnabled,
-    isSwitchingCamera
+    isSharingScreen,
+    isChangingDevice,
+    switchCamera
   } = useMediaDeviceStore();
   
   const isMobileView = useIsMobile();
   
-  // 조건: 모바일 + 카메라 2개 이상 + 화면 공유 중 아님 + 비디오 켜짐
-  if (!isMobile || !hasMultipleCameras || isSharingScreen || !isVideoEnabled) {
+  // 조건: 모바일 + 카메라 2개 이상 + 화면 공유 중 아님 + 비디오 활성화
+  if (!isMobile || videoInputs.length < 2 || isSharingScreen || !isVideoEnabled) {
     return null;
   }
   
@@ -29,16 +32,16 @@ export const MobileCameraToggle = () => {
         variant="ghost"
         size="sm"
         onClick={switchCamera}
-        disabled={isSwitchingCamera}
+        disabled={isChangingDevice}
         className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1"
       >
-        {isSwitchingCamera ? (
+        {isChangingDevice ? (
           <Loader2 className="w-5 h-5 animate-spin" />
         ) : (
           <RotateCw className="w-5 h-5" />
         )}
         <span className="text-[10px]">
-          {isSwitchingCamera ? '전환중' : '전환'}
+          {isChangingDevice ? '전환 중' : '카메라'}
         </span>
       </Button>
     );
@@ -50,11 +53,11 @@ export const MobileCameraToggle = () => {
       variant="secondary"
       size="lg"
       onClick={switchCamera}
-      disabled={isSwitchingCamera}
+      disabled={isChangingDevice}
       className="rounded-full"
-      title={`${cameraFacing === 'user' ? '후면' : '전면'} 카메라로 전환`}
+      title="카메라 전환"
     >
-      {isSwitchingCamera ? (
+      {isChangingDevice ? (
         <Loader2 className="w-5 h-5 animate-spin" />
       ) : (
         <RotateCw className="w-5 h-5" />

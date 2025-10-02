@@ -1,7 +1,12 @@
+/**
+ * @fileoverview Room 페이지 (수정)
+ * @module pages/Room
+ */
+
 import { useEffect, useMemo } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useUIManagementStore } from '@/stores/useUIManagementStore';
-import { useLobbyStore } from '@/stores/useLobbyStore';
+import { useMediaDeviceStore } from '@/stores/useMediaDeviceStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useTranscriptionStore } from '@/stores/useTranscriptionStore';
 import { useAutoHideControls } from '@/hooks/useAutoHideControls';
@@ -17,9 +22,6 @@ import { toast } from 'sonner';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 import { useTurnCredentials } from '@/hooks/useTurnCredentials';
-import { useSignalingStore } from '@/stores/useSignalingStore';
-import { useMediaDeviceStore } from '@/stores/useMediaDeviceStore';
-import { usePeerConnectionStore } from '@/stores/usePeerConnectionStore';
 
 const Room = () => {
   const navigate = useNavigate();
@@ -29,6 +31,8 @@ const Room = () => {
 
   const { activePanel, showControls, setActivePanel } = useUIManagementStore();
   const { clearSession } = useSessionStore();
+  const { localStream } = useMediaDeviceStore();
+  
   const { 
     isTranscriptionEnabled, 
     transcriptionLanguage, 
@@ -37,28 +41,31 @@ const Room = () => {
     toggleTranscription 
   } = useTranscriptionStore();
 
-  const lobbyStream = useLobbyStore((s) => s.stream);
   const { connectionDetails } = location.state || {};
-  
+
+  // Room 파라미터 생성
   const roomParams = useMemo(() => {
-    if (roomTitle && connectionDetails && lobbyStream) {
+    if (roomTitle && connectionDetails && localStream) {
       return {
         roomId: decodeURIComponent(roomTitle),
         userId: connectionDetails.userId,
         nickname: connectionDetails.nickname,
-        localStream: lobbyStream,
+        localStream: localStream,
       };
     }
     return null;
-  }, [roomTitle, connectionDetails, lobbyStream]);
+  }, [roomTitle, connectionDetails, localStream]);
 
+  // TURN 서버 자격증명
   useTurnCredentials();
 
+  // Room Orchestrator
   useRoomOrchestrator(roomParams);
   
-  // 모바일에서는 자동 숨김 비활성화
+  // 자동 숨김 컨트롤
   useAutoHideControls(isMobile ? 0 : 3000);
 
+  // 음성 인식
   const { start, stop, isSupported } = useSpeechRecognition({
     lang: transcriptionLanguage,
     onResult: (text, isFinal) => {
@@ -67,7 +74,7 @@ const Room = () => {
     },
     onError: (e) => {
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        toast.error("Subtitle feature requires microphone permission.");
+        toast.error("자막 기능은 마이크 권한이 필요합니다.");
         toggleTranscription();
       }
     }
@@ -82,74 +89,15 @@ const Room = () => {
     return () => stop();
   }, [isTranscriptionEnabled, isSupported, start, stop]);
 
+  // 유효성 검증
   useEffect(() => {
     if (!roomParams) {
-      toast.error("Invalid room access. Please prepare in the lobby first.");
+      toast.error("잘못된 방 접근입니다. 로비에서 다시 시도하세요.");
       navigate(`/lobby/${roomTitle || ''}`);
     }
   }, [roomParams, navigate, roomTitle]);
 
-  useEffect(() => {
-    // 브라우저 종료/새로고침 감지
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      const { disconnect } = useSignalingStore.getState();
-      disconnect(); // 즉시 연결 해제
-      
-      // 통화 중일 때만 경고 표시
-      if (roomParams) {
-        e.preventDefault();
-        e.returnValue = ''; // Chrome requires returnValue to be set
-      }
-    };
-
-    // 페이지 숨김 감지 (모바일 앱 전환 등)
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        console.log('[Room] 페이지가 숨겨짐 (백그라운드 전환)');
-        // 필요시 추가 처리
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      
-      // 컴포넌트 언마운트 시 정리
-      const { disconnect } = useSignalingStore.getState();
-      disconnect();
-      clearSession();
-    };
-  }, [roomParams]);
-  
-  // useEffect에 스트림 변경 감지 추가
-  useEffect(() => {
-    if (!roomParams) return;
-    
-    // MediaDeviceStore의 localStream 변경 감지
-    const unsubscribe = useMediaDeviceStore.subscribe(
-      (state) => {
-        if (state.localStream && roomParams.localStream !== state.localStream) {
-          console.log('[Room] Local stream changed, updating room params');
-          
-          // roomParams 업데이트 (불변성 유지)
-          // 주의: roomParams는 useMemo로 생성되므로 직접 수정 불가
-          // 대신 usePeerConnectionStore의 webRTCManager.updateLocalStream 호출
-          const { webRTCManager } = usePeerConnectionStore.getState();
-          if (webRTCManager) {
-            webRTCManager.updateLocalStream(state.localStream);
-          }
-        }
-      }
-    );
-    
-    return () => {
-      unsubscribe();
-    };
-  }, [roomParams]);
-
+  // 정리
   useEffect(() => {
     return () => {
       clearSession();
@@ -159,7 +107,7 @@ const Room = () => {
   if (!connectionDetails) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <p>Loading...</p>
+        <p>로딩 중...</p>
       </div>
     );
   }
@@ -167,20 +115,19 @@ const Room = () => {
   return (
     <div className={cn(
       "h-screen bg-background flex flex-col relative overflow-hidden",
-      isMobile && "h-[100dvh]" // 모바일에서 동적 뷰포트 높이 사용
+      isMobile && "h-[100dvh]"
     )}>
       {/* 비디오 레이아웃 */}
       <div className={cn(
         "flex-1 relative",
-        isMobile && "pb-16" // 모바일에서 하단 컨트롤바 공간 확보
+        isMobile && "pb-16"
       )}>
         <VideoLayout />
       </div>
 
-      {/* 사이드 패널들 - 모바일에서는 전체 화면 */}
+      {/* 패널 (모바일 전체화면) */}
       {isMobile ? (
         <>
-          {/* 모바일 채팅 패널 - 전체 화면 */}
           {activePanel === "chat" && (
             <div className="fixed inset-0 z-50 bg-background">
               <ChatPanel 
@@ -190,7 +137,6 @@ const Room = () => {
             </div>
           )}
 
-          {/* 모바일 화이트보드 - 전체 화면 */}
           {activePanel === "whiteboard" && (
             <div className="fixed inset-0 z-50 bg-background">
               <WhiteboardPanel 
@@ -200,7 +146,6 @@ const Room = () => {
             </div>
           )}
 
-          {/* 모바일 설정 - 전체 화면 */}
           {activePanel === "settings" && (
             <div className="fixed inset-0 z-50">
               <SettingsPanel 
@@ -210,7 +155,6 @@ const Room = () => {
             </div>
           )}
 
-          {/* 파일 스트리밍 - 전체 화면 */}
           {activePanel === "fileStreaming" && (
             <FileStreamingPanel
               isOpen={true}
@@ -220,7 +164,6 @@ const Room = () => {
         </>
       ) : (
         <>
-          {/* 데스크톱 사이드 패널들 */}
           <ChatPanel 
             isOpen={activePanel === "chat"} 
             onClose={() => setActivePanel("chat")} 
@@ -240,9 +183,8 @@ const Room = () => {
         </>
       )}
 
-      {/* 컨트롤바 */}
+      {/* 컨트롤 바 */}
       {!isMobile ? (
-        // 데스크톱: 하단 중앙 플로팅
         <div className={cn(
           "absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30",
           showControls ? "opacity-100" : "opacity-0 pointer-events-none"
@@ -250,7 +192,6 @@ const Room = () => {
           <ControlBar />
         </div>
       ) : (
-        // 모바일: 항상 표시
         <ControlBar />
       )}
     </div>
