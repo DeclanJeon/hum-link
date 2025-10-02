@@ -66,6 +66,13 @@ export const useSignalingStore = create<SignalingState & SignalingActions>((set,
       events.onConnect();
       socket.emit('join-room', { roomId, userId, nickname });
 
+      // ✅ 추가: join-room 완료 후 TURN 자격 증명 요청
+      // 약간의 딜레이를 주어 socket.data.userId가 설정되도록 함
+      setTimeout(() => {
+        console.log('[Signaling] Requesting TURN credentials...');
+        socket.emit('request-turn-credentials');
+      }, 100); // 100ms 딜레이
+
       // 🔥 하트비트 시작 (30초마다)
       const heartbeatInterval = setInterval(() => {
         if (socket.connected) {

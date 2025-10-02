@@ -54,8 +54,11 @@ export const useTurnCredentials = () => {
         const currentSocket = useSignalingStore.getState().socket;
         const currentStatus = useSignalingStore.getState().status;
         
+        // ✅ 추가: socket.data.userId 확인
+        const hasUserId = currentSocket && (currentSocket as any).data?.userId;
+        
         // 연결 성공
-        if (currentSocket && currentSocket.connected && currentStatus === 'connected') {
+        if (currentSocket && currentSocket.connected && currentStatus === 'connected' && hasUserId) {
           console.log('[TurnCredentials] ✅ Socket connected');
           resolve(true);
           return;
