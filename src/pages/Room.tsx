@@ -21,7 +21,6 @@ import { VideoLayout } from '@/components/VideoLayout';
 import { toast } from 'sonner';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
-import { useTurnCredentials } from '@/hooks/useTurnCredentials';
 
 const Room = () => {
   const navigate = useNavigate();
@@ -56,9 +55,7 @@ const Room = () => {
     return null;
   }, [roomTitle, connectionDetails, localStream]);
 
-  // TURN 서버 자격증명
-  useTurnCredentials();
-
+  
   // Room Orchestrator
   useRoomOrchestrator(roomParams);
   

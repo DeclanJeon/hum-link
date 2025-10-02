@@ -1,5 +1,5 @@
 /**
- * TURN 자격증명 자동 갱신 Hook
+ * TURN 자격증명 관리 Hook (개선 버전)
  */
 import { useEffect, useRef, useCallback } from 'react';
 import { useSignalingStore } from '@/stores/useSignalingStore';
@@ -24,29 +24,106 @@ interface TurnCredentialsResponse {
   };
 }
 
+/**
+ * 소켓 연결 상태
+ */
+type SocketState = 'disconnected' | 'connecting' | 'connected';
+
 export const useTurnCredentials = () => {
   const renewalTimer = useRef<NodeJS.Timeout>();
   const retryCount = useRef(0);
   const lastCredentials = useRef<TurnCredentialsResponse | null>(null);
+  const isRequestingRef = useRef(false);
+  const socketWaitTimer = useRef<NodeJS.Timeout>();
   
-  const { socket } = useSignalingStore();
+  const { socket, status: signalingStatus } = useSignalingStore();
   const { updateIceServers } = usePeerConnectionStore();
   
   /**
-   * 자격증명 갱신
+   * 소켓 연결 대기 (Promise 기반)
    */
-  const renewCredentials = useCallback(() => {
-    if (!socket || !socket.connected) {
-      console.warn('[TurnCredentials] Socket not connected, skipping renewal');
+  const waitForSocketConnection = useCallback(async (): Promise<boolean> => {
+    const maxWaitTime = 10000; // 10초
+    const checkInterval = 200; // 200ms마다 체크
+    let elapsed = 0;
+    
+    console.log('[TurnCredentials] Waiting for socket connection...');
+    
+    return new Promise((resolve) => {
+      const checkConnection = () => {
+        const currentSocket = useSignalingStore.getState().socket;
+        const currentStatus = useSignalingStore.getState().status;
+        
+        // 연결 성공
+        if (currentSocket && currentSocket.connected && currentStatus === 'connected') {
+          console.log('[TurnCredentials] ✅ Socket connected');
+          resolve(true);
+          return;
+        }
+        
+        // 타임아웃
+        if (elapsed >= maxWaitTime) {
+          console.warn('[TurnCredentials] ⏱️ Socket connection timeout');
+          resolve(false);
+          return;
+        }
+        
+        // 계속 대기
+        elapsed += checkInterval;
+        socketWaitTimer.current = setTimeout(checkConnection, checkInterval);
+      };
+      
+      checkConnection();
+    });
+  }, []);
+  
+  /**
+   * TURN 자격증명 요청
+   */
+  const requestCredentials = useCallback(async () => {
+    // 중복 요청 방지
+    if (isRequestingRef.current) {
+      console.log('[TurnCredentials] ⚠️ Request already in progress, skipping');
       return;
     }
     
-    console.log('[TurnCredentials] Requesting new credentials...');
+    const currentSocket = useSignalingStore.getState().socket;
+    
+    // 소켓이 없거나 연결되지 않은 경우
+    if (!currentSocket || !currentSocket.connected) {
+      console.log('[TurnCredentials] 🔌 Socket not ready, waiting...');
+      
+      const isConnected = await waitForSocketConnection();
+      
+      if (!isConnected) {
+        console.error('[TurnCredentials] ❌ Failed to establish socket connection');
+        toast.error('서버 연결 실패. STUN 서버만 사용합니다.');
+        
+        // Fallback: STUN only
+        updateIceServers([
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]);
+        
+        return;
+      }
+    }
+    
+    // 재요청
+    const socket = useSignalingStore.getState().socket;
+    if (!socket) {
+      console.error('[TurnCredentials] Socket lost during wait');
+      return;
+    }
+    
+    isRequestingRef.current = true;
+    console.log('[TurnCredentials] 📡 Requesting TURN credentials...');
     
     socket.emit('request-turn-credentials');
     
+    // 응답 핸들러 설정
     const handleCredentials = (data: TurnCredentialsResponse) => {
-      console.log('[TurnCredentials] Received response:', {
+      console.log('[TurnCredentials] 📥 Received response:', {
         hasIceServers: !!data.iceServers,
         ttl: data.ttl,
         error: data.error
@@ -54,6 +131,7 @@ export const useTurnCredentials = () => {
       
       if (data.error) {
         handleError(data);
+        isRequestingRef.current = false;
         return;
       }
       
@@ -63,46 +141,52 @@ export const useTurnCredentials = () => {
         lastCredentials.current = data;
         retryCount.current = 0;
         
-        // 할당량 경고
+        // 쿼터 경고
         if (data.quota && data.quota.percentage > 80) {
-          toast.warning(`TURN quota ${data.quota.percentage.toFixed(1)}% used`);
+          toast.warning(`TURN 쿼터 ${data.quota.percentage.toFixed(1)}% 사용 중`);
         }
         
-        // TTL의 75%에서 갱신 (안전 마진)
+        // TTL 75% 지점에서 갱신 (기본 24시간)
         const ttl = data.ttl || 86400;
         const renewalTime = ttl * 0.75 * 1000;
         
-        console.log(`[TurnCredentials] Scheduling renewal in ${renewalTime / 1000}s`);
+        console.log(`[TurnCredentials] ⏰ Scheduling renewal in ${(renewalTime / 1000 / 60).toFixed(1)} minutes`);
         
-        // 기존 타이머 취소
+        // 기존 타이머 클리어
         if (renewalTimer.current) {
           clearTimeout(renewalTimer.current);
         }
         
-        renewalTimer.current = setTimeout(renewCredentials, renewalTime);
+        renewalTimer.current = setTimeout(() => {
+          console.log('[TurnCredentials] 🔄 Auto-renewal triggered');
+          requestCredentials();
+        }, renewalTime);
         
-        // 성공 알림 (첫 요청시만)
+        // 첫 요청인 경우에만 토스트
         if (retryCount.current === 0 && !lastCredentials.current) {
-          toast.success('Relay server connected', { duration: 2000 });
+          toast.success('릴레이 서버 연결됨', { duration: 2000 });
         }
       }
+      
+      isRequestingRef.current = false;
     };
     
-    // 일회성 리스너
+    // 응답 리스너 등록 (once 사용)
     socket.once('turn-credentials', handleCredentials);
     
-    // 타임아웃 처리
+    // 타임아웃 설정 (5초)
     const timeout = setTimeout(() => {
       socket.off('turn-credentials', handleCredentials);
       handleTimeout();
+      isRequestingRef.current = false;
     }, 5000);
     
-    // 응답 받으면 타임아웃 취소
+    // 응답 받으면 타임아웃 클리어
     socket.once('turn-credentials', () => {
       clearTimeout(timeout);
     });
     
-  }, [socket, updateIceServers]);
+  }, [waitForSocketConnection, updateIceServers]);
   
   /**
    * 에러 처리
@@ -112,19 +196,22 @@ export const useTurnCredentials = () => {
     
     switch (data.code) {
       case 'AUTH_REQUIRED':
-        toast.error('Authentication required for TURN server');
+        toast.error('TURN 서버 인증 필요');
         break;
         
       case 'RATE_LIMIT':
         const retryAfter = (data as any).retryAfter || 60;
-        toast.warning(`Rate limited. Retry after ${retryAfter}s`);
+        toast.warning(`요청 제한. ${retryAfter}초 후 재시도`);
         
-        // 재시도 스케줄
-        renewalTimer.current = setTimeout(renewCredentials, retryAfter * 1000);
+        // 재시도 예약
+        renewalTimer.current = setTimeout(() => {
+          console.log('[TurnCredentials] Retrying after rate limit...');
+          requestCredentials();
+        }, retryAfter * 1000);
         break;
         
       case 'QUOTA_EXCEEDED':
-        toast.error('Daily bandwidth quota exceeded');
+        toast.error('일일 대역폭 쿼터 초과');
         // Fallback to STUN only
         updateIceServers([
           { urls: 'stun:stun.l.google.com:19302' },
@@ -133,12 +220,12 @@ export const useTurnCredentials = () => {
         break;
         
       case 'LIMIT_EXCEEDED':
-        toast.error('Connection limit exceeded');
+        toast.error('연결 제한 초과');
         break;
         
       default:
-        toast.error('Failed to get TURN credentials');
-        // 재시도
+        toast.error('TURN 자격증명 가져오기 실패');
+        // 재시도 로직
         scheduleRetry();
     }
   };
@@ -147,15 +234,15 @@ export const useTurnCredentials = () => {
    * 타임아웃 처리
    */
   const handleTimeout = () => {
-    console.warn('[TurnCredentials] Request timeout');
+    console.warn('[TurnCredentials] ⏱️ Request timeout');
     
     if (lastCredentials.current?.iceServers) {
-      // 이전 자격증명 재사용
-      console.log('[TurnCredentials] Using cached credentials');
+      // 캐시된 자격증명 사용
+      console.log('[TurnCredentials] 📦 Using cached credentials');
       updateIceServers(lastCredentials.current.iceServers);
     } else {
-      // STUN 전용 fallback
-      console.log('[TurnCredentials] Falling back to STUN only');
+      // STUN only fallback
+      console.log('[TurnCredentials] 🔄 Falling back to STUN only');
       updateIceServers([
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' }
@@ -166,51 +253,78 @@ export const useTurnCredentials = () => {
   };
   
   /**
-   * 재시도 스케줄링
+   * 재시도 스케줄링 (exponential backoff)
    */
   const scheduleRetry = () => {
     retryCount.current++;
     
     if (retryCount.current > 5) {
-      console.error('[TurnCredentials] Max retries exceeded');
-      toast.error('Unable to connect to relay server');
+      console.error('[TurnCredentials] ❌ Max retries exceeded');
+      toast.error('릴레이 서버 연결 불가');
       return;
     }
     
-    // 지수 백오프
+    // 지수 백오프: 2초, 4초, 8초, 16초, 32초
     const delay = Math.min(30000, Math.pow(2, retryCount.current) * 1000);
-    console.log(`[TurnCredentials] Retrying in ${delay / 1000}s (attempt ${retryCount.current})`);
+    console.log(`[TurnCredentials] 🔄 Retrying in ${delay / 1000}s (attempt ${retryCount.current})`);
     
-    renewalTimer.current = setTimeout(renewCredentials, delay);
+    renewalTimer.current = setTimeout(() => {
+      requestCredentials();
+    }, delay);
   };
   
   /**
    * 수동 갱신
    */
   const refreshCredentials = useCallback(() => {
-    console.log('[TurnCredentials] Manual refresh requested');
+    console.log('[TurnCredentials] 🔄 Manual refresh requested');
     retryCount.current = 0;
-    renewCredentials();
-  }, [renewCredentials]);
+    requestCredentials();
+  }, [requestCredentials]);
   
   /**
-   * 초기화 및 정리
+   * 초기 요청 및 소켓 상태 감지
    */
   useEffect(() => {
-    if (socket && socket.connected) {
-      // 초기 요청
-      renewCredentials();
+    // 소켓이 연결되면 자동으로 요청
+    if (socket && socket.connected && signalingStatus === 'connected') {
+      console.log('[TurnCredentials] 🚀 Socket connected, requesting credentials');
+      requestCredentials();
     }
     
     return () => {
+      // 클린업
       if (renewalTimer.current) {
         clearTimeout(renewalTimer.current);
       }
+      if (socketWaitTimer.current) {
+        clearTimeout(socketWaitTimer.current);
+      }
     };
-  }, [socket, renewCredentials]);
+  }, [socket, socket?.connected, signalingStatus, requestCredentials]);
+  
+  /**
+   * 소켓 재연결 감지
+   */
+  useEffect(() => {
+    if (!socket) return;
+    
+    const handleReconnect = () => {
+      console.log('[TurnCredentials] 🔄 Socket reconnected, refreshing credentials');
+      retryCount.current = 0;
+      requestCredentials();
+    };
+    
+    socket.on('reconnect', handleReconnect);
+    
+    return () => {
+      socket.off('reconnect', handleReconnect);
+    };
+  }, [socket, requestCredentials]);
   
   return {
     refreshCredentials,
-    lastCredentials: lastCredentials.current
+    lastCredentials: lastCredentials.current,
+    isRequesting: isRequestingRef.current
   };
 };
