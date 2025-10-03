@@ -1,40 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import { VideoPreview } from "@/components/VideoPreview";
 import { DraggableVideo } from "@/components/DraggableVideo";
-// import { VerticalAudioVisualizer } from "@/components/VerticalAudioVisualizer";
-import { usePeerConnectionStore } from "@/stores/usePeerConnectionStore";
 import { useUIManagementStore } from "@/stores/useUIManagementStore";
 import { useMediaDeviceStore } from "@/stores/useMediaDeviceStore";
 import { useTranscriptionStore } from "@/stores/useTranscriptionStore";
-import { useSessionStore } from "@/stores/useSessionStore";
-import { useFileStreamingStore } from "@/stores/useFileStreamingStore";
 import { useSubtitleStore } from "@/stores/useSubtitleStore";
-// import { useAudioLevel } from "@/hooks/useAudioLevel";
 import { Loader2, Eye, RotateCw } from "lucide-react";
 import { SubtitleOverlay } from './SubtitleOverlay';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from './ui/button';
-import { cn } from '@/lib/utils';
+import { useParticipants, Participant } from '@/hooks/useParticipants';
 
-/**
- * 참가자 인터페이스
- */
-interface Participant {
-  isLocal: boolean;
-  userId: string;
-  nickname: string;
-  stream: MediaStream | null;
-  videoEnabled: boolean;
-  audioEnabled: boolean;
-  connectionState?: 'connecting' | 'connected' | 'disconnected' | 'failed';
-  transcript?: { text: string; isFinal: boolean; lang?: string };
-  audioLevel: number;
-  isFileStreaming?: boolean;
-}
-
-/**
- * 로컬 비디오 타일 컴포넌트
- */
 const LocalVideoTile = ({ participant, isMobile }: { participant: Participant; isMobile: boolean }) => {
   const { switchCamera, isMobile: isDeviceMobile, hasMultipleCameras } = useMediaDeviceStore();
   
@@ -45,11 +21,10 @@ const LocalVideoTile = ({ participant, isMobile }: { participant: Participant; i
         nickname={participant.nickname}
         isVideoEnabled={participant.videoEnabled}
         isLocalVideo={true}
-        audioLevel={0} // 임시로 0 고정
+        audioLevel={0}
         showSubtitles={false}
       />
       
-      {/* 모바일 카메라 전환 버튼 */}
       {isMobile && isDeviceMobile && hasMultipleCameras && (
         <Button
           variant="ghost"
@@ -64,9 +39,6 @@ const LocalVideoTile = ({ participant, isMobile }: { participant: Participant; i
   );
 };
 
-/**
- * 원격 비디오 타일 컴포넌트
- */
 const RemoteVideoTile = ({
   participant,
   showAudioVisualizer
@@ -85,13 +57,12 @@ const RemoteVideoTile = ({
         nickname={participant.nickname}
         isVideoEnabled={participant.videoEnabled}
         isLocalVideo={false}
-        audioLevel={0} // 임시로 0 고정
+        audioLevel={0}
         showSubtitles={false}
-        showVoiceFrame={false} // 비주얼라이저 비활성화
+        showVoiceFrame={false}
       />
       
-      {/* 파일 스트리밍 자막 표시 */}
-      {participant.isFileStreaming && isRemoteSubtitleEnabled && remoteSubtitleCue && (
+      {participant.isStreamingFile && isRemoteSubtitleEnabled && remoteSubtitleCue && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-fit max-w-[90%] p-2.5 rounded-lg bg-black/60 backdrop-blur-md text-center pointer-events-none z-20">
           <p className="text-lg lg:text-xl font-semibold text-white">
             {remoteSubtitleCue.text}
@@ -99,25 +70,13 @@ const RemoteVideoTile = ({
         </div>
       )}
       
-      {/* 음성 인식 자막 표시 (파일 스트리밍 아닐 때) */}
-      {!participant.isFileStreaming && participant.transcript && (
+      {!participant.isStreamingFile && participant.transcript && (
         <SubtitleOverlay
           transcript={participant.transcript}
           targetLang={translationTargetLanguage}
         />
       )}
       
-      {/* 오디오 시각화 - 주석 처리 */}
-      {/* {showAudioVisualizer && participant.stream && (
-        <VerticalAudioVisualizer
-          audioLevel={participant.audioLevel}
-          isActive={participant.audioEnabled}
-          className="absolute left-4 top-1/2 -translate-y-1/2 z-30"
-          showIcon={true}
-        />
-      )} */}
-      
-      {/* 연결 상태 표시 */}
       {participant.connectionState === 'connecting' && (
         <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center rounded-lg gap-4">
           <Loader2 className="w-8 h-8 text-white animate-spin" />
@@ -134,88 +93,26 @@ const RemoteVideoTile = ({
   );
 };
 
-/**
- * 비디오 레이아웃 컴포넌트
- */
 export const VideoLayout = () => {
   const { viewMode } = useUIManagementStore();
-  const { localStream, isVideoEnabled, isAudioEnabled } = useMediaDeviceStore();
-  
-  // Selector를 사용하여 필요한 부분만 구독
-  const peers = usePeerConnectionStore(state => state.peers);
-  
-  const { localTranscript, transcriptionLanguage } = useTranscriptionStore();
-  const { getSessionInfo } = useSessionStore();
-  const { isStreaming: isFileStreaming } = useFileStreamingStore();
+  const participants = useParticipants();
+  const { localStream, isVideoEnabled } = useMediaDeviceStore();
+  const localParticipant = participants.find(p => p.isLocal);
+  const remoteParticipants = participants.filter(p => !p.isLocal);
   
   const isMobileView = useIsMobile();
   const [showLocalVideo, setShowLocalVideo] = useState(true);
-  
-  const sessionInfo = getSessionInfo();
-  const localNickname = sessionInfo?.nickname || 'You';
-  const localUserId = sessionInfo?.userId || 'local';
 
-  // 원격 피어 정보
-  const remotePeers = useMemo(() => Array.from(peers.values()), [peers]);
-  const firstRemotePeer = remotePeers[0] || null;
-  
-  // 오디오 레벨 훅 주석 처리
-  // const localAudioLevel = useAudioLevel({
-  //   stream: localStream,
-  //   enabled: isAudioEnabled,
-  //   updateInterval: 50
-  // });
-  
-  // const remoteAudioLevel = useAudioLevel({
-  //   stream: firstRemotePeer?.stream || null,
-  //   enabled: firstRemotePeer?.audioEnabled || false,
-  //   updateInterval: 50
-  // });
+  if (!localParticipant) return null;
 
-  // 참가자 목록 생성 - 오디오 레벨은 0으로 고정
-  const participants = useMemo<Participant[]>(() => {
-    const localParticipant: Participant = {
-      isLocal: true,
-      userId: localUserId,
-      nickname: localNickname,
-      stream: localStream,
-      videoEnabled: isVideoEnabled,
-      audioEnabled: isAudioEnabled,
-      transcript: localTranscript ? { ...localTranscript, lang: transcriptionLanguage } : undefined,
-      audioLevel: 0, // 0으로 고정
-      isFileStreaming: isFileStreaming
-    };
-    
-    const remoteParticipants: Participant[] = remotePeers.map(peer => ({
-      isLocal: false,
-      userId: peer.userId,
-      nickname: peer.nickname,
-      stream: peer.stream || null,
-      videoEnabled: peer.videoEnabled,
-      audioEnabled: peer.audioEnabled,
-      connectionState: peer.connectionState,
-      transcript: peer.transcript,
-      audioLevel: 0, // 0으로 고정
-      isFileStreaming: peer.isStreamingFile || false
-    }));
-    
-    return [localParticipant, ...remoteParticipants];
-  }, [
-    localUserId, localNickname, localStream, isVideoEnabled, isAudioEnabled,
-    localTranscript, transcriptionLanguage, isFileStreaming,
-    remotePeers, firstRemotePeer
-  ]);
-
-  // 모바일 그리드 뷰
   if (isMobileView && viewMode === 'grid') {
     return (
       <div className="flex flex-col h-full">
-        {/* 상단: 원격 비디오 */}
         <div className="flex-1 relative">
-          {firstRemotePeer ? (
+          {remoteParticipants.length > 0 ? (
             <RemoteVideoTile 
-              participant={participants.find(p => !p.isLocal) || participants[1]} 
-              showAudioVisualizer={false} // 비주얼라이저 비활성화
+              participant={remoteParticipants[0]} 
+              showAudioVisualizer={false}
             />
           ) : (
             <div className="flex items-center justify-center h-full bg-muted/50 rounded-lg">
@@ -223,11 +120,9 @@ export const VideoLayout = () => {
             </div>
           )}
         </div>
-
-        {/* 하단: 로컬 비디오 */}
         <div className="flex-1 relative">
           <LocalVideoTile 
-            participant={participants.find(p => p.isLocal)!} 
+            participant={localParticipant} 
             isMobile={true}
           />
         </div>
@@ -235,16 +130,14 @@ export const VideoLayout = () => {
     );
   }
 
-  // 모바일 스피커 뷰
   if (isMobileView && viewMode === 'speaker') {
     return (
       <div className="relative h-full">
-        {/* 메인 화면 (원격) */}
-        {firstRemotePeer ? (
+        {remoteParticipants.length > 0 ? (
           <div className="absolute inset-0">
             <RemoteVideoTile 
-              participant={participants.find(p => !p.isLocal) || participants[1]} 
-              showAudioVisualizer={false} // 비주얼라이저 비활성화
+              participant={remoteParticipants[0]} 
+              showAudioVisualizer={false}
             />
           </div>
         ) : (
@@ -252,12 +145,10 @@ export const VideoLayout = () => {
             <p className="text-muted-foreground">Waiting for participant...</p>
           </div>
         )}
-
-        {/* 드래그 가능한 로컬 비디오 */}
         {showLocalVideo ? (
           <DraggableVideo
             stream={localStream}
-            nickname={localNickname}
+            nickname={localParticipant.nickname}
             isVideoEnabled={isVideoEnabled}
             isLocalVideo={true}
             onHide={() => setShowLocalVideo(false)}
@@ -277,7 +168,6 @@ export const VideoLayout = () => {
     );
   }
 
-  // 데스크톱 그리드 뷰
   if (viewMode === 'grid') {
     const gridClass = participants.length <= 2 ? 'grid-cols-2' : 
                      participants.length <= 4 ? 'grid-cols-2' : 
@@ -292,7 +182,7 @@ export const VideoLayout = () => {
             ) : (
               <RemoteVideoTile 
                 participant={participant} 
-                showAudioVisualizer={false} // 비주얼라이저 비활성화
+                showAudioVisualizer={false}
               />
             )}
           </div>
@@ -301,14 +191,13 @@ export const VideoLayout = () => {
     );
   }
 
-  // 데스크톱 스피커 뷰
   return (
     <>
-      {firstRemotePeer ? (
+      {remoteParticipants.length > 0 ? (
         <div className="absolute inset-4">
           <RemoteVideoTile 
-            participant={participants.find(p => !p.isLocal) || participants[1]} 
-            showAudioVisualizer={false} // 비주얼라이저 비활성화
+            participant={remoteParticipants[0]} 
+            showAudioVisualizer={false}
           />
         </div>
       ) : (
@@ -319,7 +208,7 @@ export const VideoLayout = () => {
       
       <div className="absolute bottom-24 right-6 w-48 lg:w-64 aspect-video z-20">
         <LocalVideoTile 
-          participant={participants.find(p => p.isLocal)!} 
+          participant={localParticipant} 
           isMobile={false}
         />
       </div>

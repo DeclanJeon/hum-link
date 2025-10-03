@@ -1,5 +1,5 @@
 /**
- * @fileoverview Room 페이지 (수정)
+ * @fileoverview Room  ()
  * @module pages/Room
  */
 
@@ -12,12 +12,12 @@ import { useTranscriptionStore } from '@/stores/useTranscriptionStore';
 import { useAutoHideControls } from '@/hooks/useAutoHideControls';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useRoomOrchestrator } from '@/hooks/useRoomOrchestrator';
-import { ControlBar } from '@/components/ControlBar';
 import { ChatPanel } from '@/components/ChatPanel';
 import { WhiteboardPanel } from '@/components/WhiteboardPanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { FileStreamingPanel } from '@/components/FileStreaming/FileStreamingPanel';
-import { VideoLayout } from '@/components/VideoLayout';
+import { ContentLayout } from '@/components/ContentLayout';
+import { DraggableControlBar } from '@/components/DraggableControlBar';
 import { toast } from 'sonner';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
@@ -29,7 +29,7 @@ const Room = () => {
   const { roomTitle } = useParams<{ roomTitle: string }>();
   const isMobile = useIsMobile();
 
-  const { activePanel, showControls, setActivePanel } = useUIManagementStore();
+  const { activePanel, setActivePanel } = useUIManagementStore();
   const { clearSession } = useSessionStore();
   const { localStream } = useMediaDeviceStore();
   
@@ -43,7 +43,6 @@ const Room = () => {
 
   const { connectionDetails } = location.state || {};
 
-  // Room 파라미터 생성
   const roomParams = useMemo(() => {
     if (roomTitle && connectionDetails && localStream) {
       return {
@@ -56,16 +55,10 @@ const Room = () => {
     return null;
   }, [roomTitle, connectionDetails, localStream]);
 
-  // TURN 서버 자격증명
   useTurnCredentials();
-
-  // Room Orchestrator
   useRoomOrchestrator(roomParams);
-  
-  // 자동 숨김 컨트롤
-  useAutoHideControls(isMobile ? 0 : 3000);
+  useAutoHideControls(isMobile ? 5000 : 3000);
 
-  // 음성 인식
   const { start, stop, isSupported } = useSpeechRecognition({
     lang: transcriptionLanguage,
     onResult: (text, isFinal) => {
@@ -74,7 +67,7 @@ const Room = () => {
     },
     onError: (e) => {
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        toast.error("자막 기능은 마이크 권한이 필요합니다.");
+        toast.error("음성 인식을 사용할 수 없습니다. 권한을 확인해주세요.");
         toggleTranscription();
       }
     }
@@ -89,15 +82,13 @@ const Room = () => {
     return () => stop();
   }, [isTranscriptionEnabled, isSupported, start, stop]);
 
-  // 유효성 검증
   useEffect(() => {
     if (!roomParams) {
-      toast.error("잘못된 방 접근입니다. 로비에서 다시 시도하세요.");
+      toast.error("세션 정보가 없습니다. 로비로 돌아갑니다.");
       navigate(`/lobby/${roomTitle || ''}`);
     }
   }, [roomParams, navigate, roomTitle]);
 
-  // 정리
   useEffect(() => {
     return () => {
       clearSession();
@@ -107,93 +98,53 @@ const Room = () => {
   if (!connectionDetails) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <p>로딩 중...</p>
+        <p>세션 정보를 불러오는 중...</p>
       </div>
     );
   }
+
+  const renderMobilePanels = () => (
+    <>
+        {activePanel === "chat" && (
+            <div className="fixed inset-0 z-[60] bg-background">
+                <ChatPanel isOpen={true} onClose={() => setActivePanel('none')} />
+            </div>
+        )}
+        {activePanel === "settings" && (
+            <div className="fixed inset-0 z-[60] bg-background/80 backdrop-blur-sm">
+                <SettingsPanel isOpen={true} onClose={() => setActivePanel('none')} />
+            </div>
+        )}
+        {activePanel === "fileStreaming" && (
+            <FileStreamingPanel isOpen={true} onClose={() => setActivePanel('none')} />
+        )}
+        {activePanel === "whiteboard" && (
+            <div className="fixed inset-0 z-[60] bg-background">
+                <WhiteboardPanel isOpen={true} onClose={() => setActivePanel('none')} />
+            </div>
+        )}
+    </>
+  );
 
   return (
     <div className={cn(
       "h-screen bg-background flex flex-col relative overflow-hidden",
       isMobile && "h-[100dvh]"
     )}>
-      {/* 비디오 레이아웃 */}
-      <div className={cn(
-        "flex-1 relative",
-        isMobile && "pb-16"
-      )}>
-        <VideoLayout />
-      </div>
-
-      {/* 패널 (모바일 전체화면) */}
-      {isMobile ? (
-        <>
-          {activePanel === "chat" && (
-            <div className="fixed inset-0 z-50 bg-background">
-              <ChatPanel 
-                isOpen={true} 
-                onClose={() => setActivePanel("none")} 
-              />
-            </div>
-          )}
-
-          {activePanel === "whiteboard" && (
-            <div className="fixed inset-0 z-50 bg-background">
-              <WhiteboardPanel 
-                isOpen={true} 
-                onClose={() => setActivePanel("none")} 
-              />
-            </div>
-          )}
-
-          {activePanel === "settings" && (
-            <div className="fixed inset-0 z-50">
-              <SettingsPanel 
-                isOpen={true} 
-                onClose={() => setActivePanel("none")} 
-              />
-            </div>
-          )}
-
-          {activePanel === "fileStreaming" && (
-            <FileStreamingPanel
-              isOpen={true}
-              onClose={() => setActivePanel("none")}
-            />
-          )}
-        </>
-      ) : (
-        <>
-          <ChatPanel 
-            isOpen={activePanel === "chat"} 
-            onClose={() => setActivePanel("chat")} 
-          />
-          <WhiteboardPanel 
-            isOpen={activePanel === "whiteboard"} 
-            onClose={() => setActivePanel("whiteboard")} 
-          />
-          <SettingsPanel 
-            isOpen={activePanel === "settings"} 
-            onClose={() => setActivePanel("settings")} 
-          />
-          <FileStreamingPanel
-            isOpen={activePanel === "fileStreaming"}
-            onClose={() => setActivePanel("none")}
-          />
-        </>
-      )}
-
-      {/* 컨트롤 바 */}
-      {!isMobile ? (
-        <div className={cn(
-          "absolute bottom-6 left-1/2 -translate-x-1/2 transition-all duration-300 z-30",
-          showControls ? "opacity-100" : "opacity-0 pointer-events-none"
-        )}>
-          <ControlBar />
+        <div className="flex-1 relative">
+            <ContentLayout />
         </div>
-      ) : (
-        <ControlBar />
-      )}
+
+        <DraggableControlBar />
+
+        {isMobile ? renderMobilePanels() : (
+            <>
+                <ChatPanel isOpen={activePanel === "chat"} onClose={() => setActivePanel('none')} />
+                <WhiteboardPanel isOpen={activePanel === "whiteboard"} onClose={() => setActivePanel('none')} />
+                <SettingsPanel isOpen={activePanel === "settings"} onClose={() => setActivePanel('none')} />
+                <FileStreamingPanel isOpen={activePanel === "fileStreaming"} onClose={() => setActivePanel('none')} />
+            </>
+        )}
     </div>
   );
 };

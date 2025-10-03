@@ -1,8 +1,8 @@
 /**
- * @fileoverview WebRTC 연결 및 통신을 총괄하는 클래스
+ * @fileoverview WebRTC     
  * @module services/webrtc
- * @description simple-peer 라이브러리를 래핑하여 Peer 생성, 시그널링,
- *              데이터 채널 통신, 트랙 교체 등의 기능을 캡슐화합니다.
+ * @description simple-peer   Peer , ,
+ *                ,     .
  */
 
 import Peer from 'simple-peer/simplepeer.min.js';
@@ -18,7 +18,7 @@ interface WebRTCEvents {
 }
 
 /**
- * WebRTC 연결 관리를 위한 중앙 클래스
+ * WebRTC     
  */
 export class WebRTCManager {
   private peers: Map<string, PeerInstance> = new Map();
@@ -85,11 +85,42 @@ export class WebRTCManager {
             }
         } catch (error) {
             console.error(`[WebRTC] Failed to replace track for peer ${peerId}:`, error);
-            // Fallback: renegotiation
             (peer as any)._needsNegotiation = true;
             (peer as any)._onNegotiationNeeded();
         }
     }
+  }
+
+  public async replaceLocalStream(newStream: MediaStream): Promise<boolean> {
+    this.localStream = newStream;
+    const newVideoTrack = newStream.getVideoTracks()[0];
+    const newAudioTrack = newStream.getAudioTracks()[0];
+    let success = true;
+
+    for (const [peerId, peer] of this.peers.entries()) {
+      if (peer && !peer.destroyed) {
+        try {
+          const oldVideoSender = peer.streams[0]?.getVideoTracks()[0];
+          const oldAudioSender = peer.streams[0]?.getAudioTracks()[0];
+
+          if (oldVideoSender && newVideoTrack) {
+            await peer.replaceTrack(oldVideoSender, newVideoTrack, newStream);
+          } else if (newVideoTrack) {
+            peer.addTrack(newVideoTrack, newStream);
+          }
+
+          if (oldAudioSender && newAudioTrack) {
+            await peer.replaceTrack(oldAudioSender, newAudioTrack, newStream);
+          } else if (newAudioTrack) {
+            peer.addTrack(newAudioTrack, newStream);
+          }
+        } catch (error) {
+          console.error(`[WebRTC] Failed to replace stream for peer ${peerId}:`, error);
+          success = false;
+        }
+      }
+    }
+    return success;
   }
 
   public removePeer(peerId: string): void {
@@ -131,14 +162,8 @@ export class WebRTCManager {
     return false;
   }
 
-  /**
-   * 특정 피어의 데이터 채널 버퍼 크기를 반환합니다.
-   * @param {string} peerId - 피어 ID
-   * @returns {number | null} 버퍼 크기 (바이트) 또는 null
-   */
   public getBufferedAmount(peerId: string): number | null {
     const peer = this.peers.get(peerId);
-    // simple-peer 내부의 _channel에 접근
     const channel = (peer as any)?._channel;
     if (channel) {
       return channel.bufferedAmount;

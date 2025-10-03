@@ -1,7 +1,7 @@
 /**
  * @fileoverview WebRTC       (Zustand) (v2.2.2 - Quantum Handshake Calibrated)
  * @module stores/usePeerConnectionStore
- * @description v2.2.2: 수신자의 최종 완료 신호(TRANSFER_COMPLETE_ACK)를 수신하여 파일 워커에 전달하는 로직 추가.
+ * @description v2.2.2:    (TRANSFER_COMPLETE_ACK)      .
  */
 
 import { create } from 'zustand';
@@ -23,7 +23,7 @@ export interface PeerState {
   isSharingScreen: boolean;
   connectionState: 'connecting' | 'connected' | 'disconnected' | 'failed';
   transcript?: { text: string; isFinal: boolean; lang: string };
-  isStreamingFile?: boolean;
+  isStreamingFile?: boolean; // 파일 스트리밍 상태
 }
 
 interface ActiveTransfer {
@@ -40,7 +40,6 @@ interface ActiveTransfer {
         totalChunks: number;
         lastUpdateTime: number;
         ackedSize: number;
-        // v2.2.2: 최종 상태를 위한 필드
         averageSpeed?: number;
         totalTransferTime?: number;
     };
@@ -54,6 +53,7 @@ interface PeerConnectionState {
   webRTCManager: WebRTCManager | null;
   peers: Map<string, PeerState>;
   activeTransfers: Map<string, ActiveTransfer>;
+  originalStream: MediaStream | null;
 }
 
 interface PeerConnectionActions {
@@ -67,6 +67,7 @@ interface PeerConnectionActions {
   cleanup: () => void;
   updatePeerMediaState: (userId: string, kind: 'audio' | 'video', enabled: boolean) => void;
   updatePeerStreamingState: (userId: string, isStreaming: boolean) => void;
+  updatePeerScreenShareState: (userId: string, isSharing: boolean) => void;
   sendFile: (file: File) => Promise<void>;
   pauseFileTransfer: (transferId: string) => void;
   resumeFileTransfer: (transferId: string) => void;
@@ -79,6 +80,7 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
   webRTCManager: null,
   peers: new Map(),
   activeTransfers: new Map(),
+  originalStream: null,
 
   initialize: (localStream, events) => {
     const webRTCManager = new WebRTCManager(localStream, {
@@ -103,7 +105,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
                   useChatStore.getState().handleFileCancel(msg.payload.transferId);
                   return;
               }
-              // v2.2.2: 최종 완료 신호 수신
               if (msg.type === 'TRANSFER_COMPLETE_ACK') {
                   const transfer = get().activeTransfers.get(msg.payload.transferId);
                   if (transfer) {
@@ -124,7 +125,7 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
         }));
       }
     });
-    set({ webRTCManager });
+    set({ webRTCManager, originalStream: localStream });
   },
 
   createPeer: (userId, nickname, initiator) => {
@@ -210,7 +211,6 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
                 break;
             case 'transfer-complete':
                 console.log(`[PeerStore] Transfer complete: ${payload.transferId}`);
-                // v2.2.2: 송신 완료 시 최종 상태 업데이트
                 set(produce(state => {
                     const transfer = state.activeTransfers.get(payload.transferId);
                     if (transfer) {
@@ -283,7 +283,7 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
   cleanup: () => {
     get().webRTCManager?.destroyAll();
     get().activeTransfers.forEach(t => t.worker.terminate());
-    set({ webRTCManager: null, peers: new Map(), activeTransfers: new Map() });
+    set({ webRTCManager: null, peers: new Map(), activeTransfers: new Map(), originalStream: null });
   },
 
   updatePeerMediaState: (userId, kind, enabled) => set(produce(state => {
@@ -297,5 +297,12 @@ export const usePeerConnectionStore = create<PeerConnectionState & PeerConnectio
   updatePeerStreamingState: (userId, isStreaming) => set(produce(state => {
     const peer = state.peers.get(userId);
     if (peer) peer.isStreamingFile = isStreaming;
+  })),
+
+  updatePeerScreenShareState: (userId, isSharing) => set(produce(state => {
+    const peer = state.peers.get(userId);
+    if (peer) {
+      peer.isSharingScreen = isSharing;
+    }
   })),
 }));

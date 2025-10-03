@@ -2,12 +2,18 @@ import { create } from 'zustand';
 
 export type ActivePanel = 'chat' | 'whiteboard' | 'settings' | 'fileStreaming' | 'none';
 export type ViewMode = 'speaker' | 'grid';
+export type ControlBarPosition = 'bottom' | 'left' | 'top' | 'right';
+export type ControlBarSize = 'sm' | 'md' | 'lg';
 
 interface UIManagementState {
   activePanel: ActivePanel;
   showControls: boolean;
   viewMode: ViewMode;
   unreadMessageCount: number;
+  mainContentParticipantId: string | null;
+  controlBarPosition: ControlBarPosition;
+  isControlBarDragging: boolean;
+  controlBarSize: ControlBarSize;
 }
 
 interface UIManagementActions {
@@ -16,6 +22,10 @@ interface UIManagementActions {
   setViewMode: (mode: ViewMode) => void;
   incrementUnreadMessageCount: () => void;
   resetUnreadMessageCount: () => void;
+  setMainContentParticipant: (participantId: string | null) => void;
+  setControlBarPosition: (position: ControlBarPosition) => void;
+  setIsControlBarDragging: (isDragging: boolean) => void;
+  setControlBarSize: (size: ControlBarSize) => void;
   reset: () => void;
 }
 
@@ -24,12 +34,15 @@ export const useUIManagementStore = create<UIManagementState & UIManagementActio
   showControls: true,
   viewMode: 'speaker',
   unreadMessageCount: 0,
+  mainContentParticipantId: null,
+  controlBarPosition: 'bottom',
+  isControlBarDragging: false,
+  controlBarSize: 'md',
 
   setActivePanel: (panel) => {
     const currentPanel = get().activePanel;
     const newPanel = currentPanel === panel ? 'none' : panel;
     
-    // 채팅 패널이 열릴 때 읽지 않은 메시지 수를 초기화합니다.
     if (newPanel === 'chat') {
       get().resetUnreadMessageCount();
     }
@@ -45,10 +58,19 @@ export const useUIManagementStore = create<UIManagementState & UIManagementActio
 
   resetUnreadMessageCount: () => set({ unreadMessageCount: 0 }),
 
+  setMainContentParticipant: (participantId) => set({ mainContentParticipantId: participantId }),
+  setControlBarPosition: (position) => set({ controlBarPosition: position }),
+  setIsControlBarDragging: (isDragging) => set({ isControlBarDragging: isDragging }),
+  setControlBarSize: (size) => set({ controlBarSize: size }),
+
   reset: () => set({
     activePanel: 'none',
     showControls: true,
     viewMode: 'speaker',
     unreadMessageCount: 0,
+    mainContentParticipantId: null,
+    controlBarPosition: 'bottom',
+    isControlBarDragging: false,
+    controlBarSize: 'md',
   }),
 }));

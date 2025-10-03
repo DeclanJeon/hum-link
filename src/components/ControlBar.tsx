@@ -1,9 +1,9 @@
 import { useNavigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from "@/components/ui/button";
 import {
   Mic, MicOff, Video, VideoOff, MessageSquare,
-  MoreVertical, PhoneOff, Settings, ScreenShare, 
+  MoreVertical, PhoneOff, Settings, ScreenShare, ScreenShareOff,
   Captions, FileVideo, Palette, LayoutGrid, ChevronUp, X
 } from "lucide-react";
 import {
@@ -29,7 +29,7 @@ import { MobileCameraToggle } from './MobileCameraToggle';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 
-export const ControlBar = () => {
+export const ControlBar = ({ isVertical = false }: { isVertical?: boolean }) => {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -37,7 +37,7 @@ export const ControlBar = () => {
   const { 
     isAudioEnabled, 
     isVideoEnabled, 
-    isSharingScreen, 
+    isSharingScreen,
     toggleAudio, 
     toggleVideo, 
     toggleScreenShare 
@@ -48,7 +48,8 @@ export const ControlBar = () => {
     viewMode, 
     unreadMessageCount, 
     setActivePanel, 
-    setViewMode 
+    setViewMode,
+    controlBarSize
   } = useUIManagementStore();
   
   const { 
@@ -61,62 +62,79 @@ export const ControlBar = () => {
     toast.info("You have left the room.");
   };
 
-  // 모바일에서 패널 열기
   const handleMobilePanelOpen = (panel: string) => {
     setActivePanel(panel as any);
     setIsDrawerOpen(false);
   };
+  
+  const iconSize = {
+    sm: "w-4 h-4",
+    md: "w-5 h-5",
+    lg: "w-5 h-5",
+  };
 
-  // 데스크톱 뷰
+  const buttonPadding = {
+    sm: "p-2",
+    md: "p-2.5",
+    lg: "p-3",
+  };
+
+  const separatorMargin = {
+    sm: isVertical ? "my-1" : "mx-1",
+    md: isVertical ? "my-1.5" : "mx-1.5",
+    lg: isVertical ? "my-2" : "mx-2",
+  }
+
   if (!isMobile) {
     return (
-      <div className="control-panel flex items-center gap-3 px-6 py-3 bg-background/95 backdrop-blur-xl rounded-2xl shadow-lg border border-border/50">
-        {/* Core Controls */}
-        <div className="flex items-center gap-2">
+      <div className={cn(
+          "control-panel flex items-center gap-1.5 backdrop-blur-xl rounded-full shadow-lg border border-border/50",
+          isVertical ? "flex-col p-1.5" : "flex-row p-1.5"
+      )}>
+        <div className={cn("flex items-center gap-1", isVertical ? "flex-col" : "flex-row")}>
           <Button
             variant={isAudioEnabled ? "ghost" : "destructive"}
-            size="lg"
             onClick={toggleAudio}
-            className="rounded-full"
+            className={cn("rounded-full", buttonPadding[controlBarSize])}
+            title={isAudioEnabled ? "마이크 끄기" : "마이크 켜기"}
           >
-            {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+            {isAudioEnabled ? <Mic className={iconSize[controlBarSize]} /> : <MicOff className={iconSize[controlBarSize]} />}
           </Button>
 
           <Button
             variant={isVideoEnabled ? "ghost" : "destructive"}
-            size="lg"
             onClick={toggleVideo}
-            className="rounded-full"
+            className={cn("rounded-full", buttonPadding[controlBarSize])}
+            title={isVideoEnabled ? "비디오 끄기" : "비디오 켜기"}
           >
-            {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+            {isVideoEnabled ? <Video className={iconSize[controlBarSize]} /> : <VideoOff className={iconSize[controlBarSize]} />}
           </Button>
 
           <Button
             variant="destructive"
-            size="lg"
             onClick={handleLeave}
-            className="rounded-full"
+            className={cn("rounded-full", buttonPadding[controlBarSize])}
+            title="나가기"
           >
-            <PhoneOff className="w-5 h-5" />
+            <PhoneOff className={iconSize[controlBarSize]} />
           </Button>
         </div>
 
-        <div className="w-px h-8 bg-border/50" />
+        <div className={cn("bg-border/50", isVertical ? "w-full h-px" : "w-px h-6", separatorMargin[controlBarSize])} />
 
-        {/* Quick Actions */}
-        <div className="flex items-center gap-2">
+        <div className={cn("flex items-center gap-1", isVertical ? "flex-col" : "flex-row")}>
           <div className="relative">
             <Button
               variant={activePanel === "chat" ? "default" : "secondary"}
-              size="lg"
               onClick={() => setActivePanel("chat")}
-              className="rounded-full"
+              className={cn("rounded-full", buttonPadding[controlBarSize])}
+              title="채팅"
             >
-              <MessageSquare className="w-5 h-5" />
+              <MessageSquare className={iconSize[controlBarSize]} />
             </Button>
             {unreadMessageCount > 0 && (
               <Badge 
-                className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center"
+                className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center text-[10px]"
                 variant="destructive"
               >
                 {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
@@ -125,55 +143,51 @@ export const ControlBar = () => {
           </div>
 
           <Button
-            variant="secondary"
-            size="lg"
-            onClick={() => toggleScreenShare(toast)}
-            className="rounded-full"
+            variant={isSharingScreen ? "default" : "secondary"}
+            onClick={() => toggleScreenShare()}
+            className={cn("rounded-full", buttonPadding[controlBarSize])}
+            title={isSharingScreen ? "화면 공유 중지" : "화면 공유"}
           >
-            <ScreenShare className="w-5 h-5" />
+            {isSharingScreen ? (
+              <ScreenShareOff className={cn(iconSize[controlBarSize], "text-destructive-foreground")} />
+            ) : (
+              <ScreenShare className={iconSize[controlBarSize]} />
+            )}
           </Button>
 
           <Button
             variant={isTranscriptionEnabled ? "default" : "secondary"}
-            size="lg"
             onClick={toggleTranscription}
-            className="rounded-full"
+            className={cn("rounded-full", buttonPadding[controlBarSize])}
+            title={isTranscriptionEnabled ? "자막 끄기" : "자막 켜기"}
           >
-            <Captions className="w-5 h-5" />
+            <Captions className={iconSize[controlBarSize]} />
           </Button>
         </div>
 
-        <div className="w-px h-8 bg-border/50" />
+        <div className={cn("bg-border/50", isVertical ? "w-full h-px" : "w-px h-6", separatorMargin[controlBarSize])} />
 
-        {/* Advanced Options */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="secondary" size="lg" className="rounded-full">
-              <MoreVertical className="w-5 h-5" />
+            <Button variant="secondary" className={cn("rounded-full", buttonPadding[controlBarSize])} title="더보기">
+              <MoreVertical className={iconSize[controlBarSize]} />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="center" side="top" className="mb-2 w-56">
-            <DropdownMenuItem onClick={() => setActivePanel("whiteboard")}>
+             <DropdownMenuItem onClick={() => setActivePanel("whiteboard")}>
               <Palette className="w-4 h-4 mr-2" />
               Whiteboard
             </DropdownMenuItem>
-            
             <DropdownMenuItem onClick={() => setActivePanel("fileStreaming")}>
               <FileVideo className="w-4 h-4 mr-2" />
               Stream File
             </DropdownMenuItem>
-
             <DropdownMenuSeparator />
-
-            <DropdownMenuItem 
-              onClick={() => setViewMode(viewMode === 'speaker' ? 'grid' : 'speaker')}
-            >
+            <DropdownMenuItem onClick={() => setViewMode(viewMode === 'speaker' ? 'grid' : 'speaker')}>
               <LayoutGrid className="w-4 h-4 mr-2" />
               {viewMode === 'speaker' ? 'Grid View' : 'Speaker View'}
             </DropdownMenuItem>
-
             <DropdownMenuSeparator />
-
             <DropdownMenuItem onClick={() => setActivePanel("settings")}>
               <Settings className="w-4 h-4 mr-2" />
               Settings
@@ -184,186 +198,90 @@ export const ControlBar = () => {
     );
   }
 
-  // 모바일 뷰
+  // Mobile View
   return (
     <>
-      {/* 모바일 하단 고정 컨트롤바 */}
       <div className="fixed bottom-0 left-0 right-0 bg-background/95 backdrop-blur-xl border-t border-border/50 safe-area-bottom z-50">
         <div className="flex items-center justify-around px-2 py-2">
-          {/* 마이크 토글 */}
-          <Button
-            variant={isAudioEnabled ? "ghost" : "destructive"}
-            size="sm"
-            onClick={toggleAudio}
-            className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1"
-          >
-            {isAudioEnabled ? (
-              <Mic className="w-5 h-5" />
-            ) : (
-              <MicOff className="w-5 h-5" />
-            )}
-            <span className="text-[10px]">
-              {isAudioEnabled ? "Mute" : "Unmute"}
-            </span>
+          <Button variant={isAudioEnabled ? "ghost" : "destructive"} size="sm" onClick={toggleAudio} className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1">
+            {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+            <span className="text-[10px]">{isAudioEnabled ? "Mute" : "Unmute"}</span>
           </Button>
-
-          {/* 비디오 토글 */}
-          <Button
-            variant={isVideoEnabled ? "ghost" : "destructive"}
-            size="sm"
-            onClick={toggleVideo}
-            className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1"
-          >
-            {isVideoEnabled ? (
-              <Video className="w-5 h-5" />
-            ) : (
-              <VideoOff className="w-5 h-5" />
-            )}
-            <span className="text-[10px]">
-              {isVideoEnabled ? "Stop" : "Start"}
-            </span>
+          <Button variant={isVideoEnabled ? "ghost" : "destructive"} size="sm" onClick={toggleVideo} className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1">
+            {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+            <span className="text-[10px]">{isVideoEnabled ? "Stop" : "Start"}</span>
           </Button>
-
-          {/* 카메라 전환 (모바일만) */}
           <MobileCameraToggle />
-
-          {/* 채팅 */}
           <div className="relative">
-            <Button
-              variant={activePanel === "chat" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setActivePanel("chat")}
-              className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1"
-            >
+            <Button variant={activePanel === "chat" ? "default" : "ghost"} size="sm" onClick={() => setActivePanel("chat")} className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1">
               <MessageSquare className="w-5 h-5" />
               <span className="text-[10px]">Chat</span>
             </Button>
             {unreadMessageCount > 0 && (
-              <Badge 
-                className="absolute -top-1 -right-1 h-4 w-4 p-0 flex items-center justify-center text-[10px]"
-                variant="destructive"
-              >
+              <Badge className="absolute -top-1 -right-1 h-4 w-4 p-0 flex items-center justify-center text-[10px]" variant="destructive">
                 {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
               </Badge>
             )}
           </div>
-
-          {/* 더보기 메뉴 (Drawer) */}
           <Drawer open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
             <DrawerTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1"
-              >
+              <Button variant="ghost" size="sm" className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1">
                 <ChevronUp className="w-5 h-5" />
                 <span className="text-[10px]">More</span>
               </Button>
             </DrawerTrigger>
             <DrawerContent className="pb-safe">
-              <DrawerHeader className="pb-2">
-                <DrawerTitle>Options</DrawerTitle>
-              </DrawerHeader>
-              
+              <DrawerHeader className="pb-2"><DrawerTitle>Options</DrawerTitle></DrawerHeader>
               <div className="px-4 pb-8 space-y-2">
-                {/* 화면 공유 */}
                 <Button
                   variant="ghost"
                   className="w-full justify-start h-14 text-left"
                   onClick={() => {
-                    toggleScreenShare(toast);
+                    toggleScreenShare();
                     setIsDrawerOpen(false);
                   }}
                 >
-                  <ScreenShare className="w-5 h-5 mr-3" />
-                  <span>Share Screen</span>
+                  {isSharingScreen ? (
+                    <ScreenShareOff className="w-5 h-5 mr-3 text-destructive" />
+                  ) : (
+                    <ScreenShare className="w-5 h-5 mr-3" />
+                  )}
+                  <span>{isSharingScreen ? "화면 공유 중지" : "화면 공유"}</span>
                 </Button>
-
-                {/* 자막 */}
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start h-14 text-left"
-                  onClick={() => {
-                    toggleTranscription();
-                    setIsDrawerOpen(false);
-                  }}
-                >
+                <Button variant="ghost" className="w-full justify-start h-14 text-left" onClick={() => { toggleTranscription(); setIsDrawerOpen(false); }}>
                   <Captions className="w-5 h-5 mr-3" />
                   <span>Subtitles {isTranscriptionEnabled && '(On)'}</span>
                 </Button>
-
-                {/* 화이트보드 */}
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start h-14 text-left"
-                  onClick={() => handleMobilePanelOpen("whiteboard")}
-                >
+                <Button variant="ghost" className="w-full justify-start h-14 text-left" onClick={() => handleMobilePanelOpen("whiteboard")}>
                   <Palette className="w-5 h-5 mr-3" />
                   <span>Whiteboard</span>
                 </Button>
-
-                {/* 파일 스트리밍 */}
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start h-14 text-left"
-                  onClick={() => handleMobilePanelOpen("fileStreaming")}
-                >
+                <Button variant="ghost" className="w-full justify-start h-14 text-left" onClick={() => handleMobilePanelOpen("fileStreaming")}>
                   <FileVideo className="w-5 h-5 mr-3" />
                   <span>Stream File</span>
                 </Button>
-
-                {/* 뷰 모드 */}
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start h-14 text-left"
-                  onClick={() => {
-                    setViewMode(viewMode === 'speaker' ? 'grid' : 'speaker');
-                    setIsDrawerOpen(false);
-                  }}
-                >
+                <Button variant="ghost" className="w-full justify-start h-14 text-left" onClick={() => { setViewMode(viewMode === 'speaker' ? 'grid' : 'speaker'); setIsDrawerOpen(false); }}>
                   <LayoutGrid className="w-5 h-5 mr-3" />
                   <span>{viewMode === 'speaker' ? 'Grid View' : 'Speaker View'}</span>
                 </Button>
-
-                {/* 설정 */}
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start h-14 text-left"
-                  onClick={() => handleMobilePanelOpen("settings")}
-                >
+                <Button variant="ghost" className="w-full justify-start h-14 text-left" onClick={() => handleMobilePanelOpen("settings")}>
                   <Settings className="w-5 h-5 mr-3" />
                   <span>Settings</span>
                 </Button>
-
                 <div className="h-px bg-border my-4" />
-
-                {/* 통화 종료 */}
-                <Button
-                  variant="destructive"
-                  className="w-full h-14"
-                  onClick={handleLeave}
-                >
+                <Button variant="destructive" className="w-full h-14" onClick={handleLeave}>
                   <PhoneOff className="w-5 h-5 mr-3" />
                   <span>Leave Room</span>
                 </Button>
               </div>
             </DrawerContent>
           </Drawer>
-
-          {/* 통화 종료 (항상 표시) */}
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={handleLeave}
-            className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1"
-          >
+          <Button variant="destructive" size="sm" onClick={handleLeave} className="flex-1 max-w-[60px] h-12 rounded-xl flex flex-col gap-1 p-1">
             <PhoneOff className="w-5 h-5" />
             <span className="text-[10px]">Leave</span>
           </Button>
         </div>
       </div>
-
-      {/* 모바일에서 하단 여백 확보 */}
       <div className="h-16 safe-area-bottom" />
     </>
   );

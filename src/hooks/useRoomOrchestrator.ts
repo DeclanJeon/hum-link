@@ -1,5 +1,5 @@
 /**
- * @fileoverview Room Orchestrator Hook - WebRTC, 시그널링, 데이터 채널 이벤트 통합 관리 (수정)
+ * @fileoverview Room Orchestrator Hook - WebRTC, ,      ()
  * @module hooks/useRoomOrchestrator
  */
 
@@ -32,7 +32,8 @@ type ChannelMessage =
   | { type: 'subtitle-seek'; payload: { currentTime: number; timestamp: number } }
   | { type: 'subtitle-state'; payload: any }
   | { type: 'subtitle-track'; payload: any }
-  | { type: 'file-streaming-state'; payload: { isStreaming: boolean; fileType: string } };
+  | { type: 'file-streaming-state'; payload: { isStreaming: boolean; fileType: string } }
+  | { type: 'screen-share-state'; payload: { isSharing: boolean } };
 
 function isChannelMessage(obj: any): obj is ChannelMessage {
     return obj && typeof obj.type === 'string' && 'payload' in obj;
@@ -54,11 +55,12 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
     receiveSignal, 
     removePeer, 
     updatePeerMediaState, 
-    updatePeerStreamingState 
+    updatePeerStreamingState,
+    updatePeerScreenShareState
   } = usePeerConnectionStore();
   
   const { addMessage, setTypingState, handleIncomingChunk, addFileMessage } = useChatStore();
-  const { incrementUnreadMessageCount } = useUIManagementStore();
+  const { incrementUnreadMessageCount, setMainContentParticipant } = useUIManagementStore();
   const { applyRemoteDrawEvent, reset: resetWhiteboard } = useWhiteboardStore();
   const { cleanup: cleanupTranscription } = useTranscriptionStore();
   const { 
@@ -69,7 +71,7 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
   const { isStreaming: isLocalStreaming } = useFileStreamingStore();
 
   /**
-   * 데이터 채널 메시지 핸들러
+   *    
    */
   const handleChannelMessage = useCallback((peerId: string, data: any) => {
     try {
@@ -123,6 +125,17 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
                     }
                 }
                 break;
+            
+            case 'screen-share-state':
+                updatePeerScreenShareState(peerId, parsedData.payload.isSharing);
+                if (parsedData.payload.isSharing) {
+                    setMainContentParticipant(peerId);
+                } else {
+                    if (useUIManagementStore.getState().mainContentParticipantId === peerId) {
+                        setMainContentParticipant(null);
+                    }
+                }
+                break;
         
             case 'subtitle-sync':
                 {
@@ -167,7 +180,6 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
         }
     } catch (error) {
         if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
-            // 파일 청크 처리
             handleIncomingChunk(peerId, data);
         } else {
             console.error("Failed to process DataChannel message:", error, "Raw data:", data.toString());
@@ -183,21 +195,21 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
     receiveSubtitleState,
     receiveSubtitleSync,
     setRemoteSubtitleCue,
-    updatePeerStreamingState
+    updatePeerStreamingState,
+    updatePeerScreenShareState,
+    setMainContentParticipant
   ]);
 
   /**
-   * Room 입장 시 실행되는 메인 로직
+   * Room     
    */
   useEffect(() => {
     if (!params) return;
 
     const { roomId, userId, nickname, localStream } = params;
 
-    // 1. WebRTCManager 초기화 (Lobby에서 생성된 localStream 사용)
     initPeerConnection(localStream, { onData: handleChannelMessage });
 
-    // 2. 시그널링 이벤트 핸들러 설정
     const signalingEvents: SignalingEvents = {
       onConnect: () => console.log('[SIGNALING_CORE]  .'),
       onDisconnect: () => console.log('[SIGNALING_CORE]   .'),
@@ -221,31 +233,28 @@ export const useRoomOrchestrator = (params: RoomParams | null) => {
       onMediaState: ({ userId, kind, enabled }) => {
         updatePeerMediaState(userId, kind, enabled);
       },
-      onChatMessage: (message) => addMessage(message), // P2P에서는 사용 안 함
+      onChatMessage: (message) => addMessage(message),
       onData: (data) => {
-        // 파일 전송 관련 데이터 처리
         if (data.type === 'file-meta') {
           const sender = usePeerConnectionStore.getState().peers.get(data.from);
           const senderNickname = sender ? sender.nickname : 'Unknown';
           addFileMessage(data.from, senderNickname, data.payload, false);
         }
-      }, // P2P에서는 사용 안 함
+      },
     };
 
-    // 3. 시그널링 서버 연결
     connect(roomId, userId, nickname, signalingEvents);
 
-    // 4. 컴포넌트 언마운트 시 정리
     return () => {
       disconnect();
       cleanupPeerConnection();
       cleanupTranscription();
       resetWhiteboard();
     };
-  }, [params]); // params가 변경될 때만 실행
+  }, [params]);
   
   /**
-   * 파일 스트리밍 상태 변경 시 모든 피어에게 알림
+   *        
    */
   useEffect(() => {
     if (isLocalStreaming !== undefined) {
