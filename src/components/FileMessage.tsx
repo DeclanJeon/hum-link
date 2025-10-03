@@ -1,350 +1,177 @@
-import { useChatStore, ChatMessage } from "@/stores/useChatStore";
+/**
+ * @fileoverview    UI   (v2.2.2 - Quantum Handshake Calibrated)
+ * @module components/FileMessage
+ * @description /     , ETA    .
+ *              v2.2.2: 완료 시 평균 속도/시간을 표시하여 UI 멈춤 현상 해결.
+ */
+
+import { useChatStore, ChatMessage, FileTransferProgress } from "@/stores/useChatStore";
 import { usePeerConnectionStore } from "@/stores/usePeerConnectionStore";
 import { useSessionStore } from "@/stores/useSessionStore";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { File, Download, Upload, X, CheckCircle, AlertCircle, Clock, Pause, Play } from "lucide-react";
-import { useEffect, useState, useMemo } from "react";
+import { File, Download, Upload, X, CheckCircle, AlertCircle, Clock, Pause, Play, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { formatFileSize, formatSpeed, formatETA } from "@/lib/fileTransferUtils";
 
 interface FileMessageProps {
   message: ChatMessage;
 }
 
-const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-};
-
-const formatSpeed = (bytesPerSecond: number): string => {
-  return `${formatFileSize(bytesPerSecond)}/s`;
-};
-
-const formatTime = (seconds: number): string => {
-  if (!isFinite(seconds) || seconds <= 0) return '--';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  return `${Math.round(seconds / 3600)}h`;
-};
-
-type TransferStatus = 'preparing' | 'transferring' | 'verifying' | 'complete' | 'error' | 'paused';
+type TransferStatus = 'preparing' | 'transferring' | 'verifying' | 'complete' | 'paused' | 'cancelled' | 'error';
 
 export const FileMessage = ({ message }: FileMessageProps) => {
-  const { fileTransfers } = useChatStore();
-  
-  // Selector를 사용하여 필요한 부분만 구독
-  const activeTransfers = usePeerConnectionStore(state => state.activeTransfers);
-  const pauseFileTransfer = usePeerConnectionStore(state => state.pauseFileTransfer);
-  const resumeFileTransfer = usePeerConnectionStore(state => state.resumeFileTransfer);
-  const cancelFileTransfer = usePeerConnectionStore(state => state.cancelFileTransfer);
-  
-  // 현재 전송 상태 가져오기
-  const activeTransfer = activeTransfers.get(message.id);
-  const transferInfo = fileTransfers.get(message.id);
-  
-  const sessionInfo = useSessionStore.getState().getSessionInfo();
-  const isLocalFile = message.senderId === sessionInfo?.userId;
+  const transferId = message.id;
+  const isSender = message.senderId === useSessionStore.getState().getSessionInfo()?.userId;
 
-  // 상태 관리
+  // Zustand       
+  const transferProgress = useChatStore(state => state.fileTransfers.get(transferId));
+  const activeTransfer = usePeerConnectionStore(state => state.activeTransfers.get(transferId));
+  const { pauseFileTransfer, resumeFileTransfer, cancelFileTransfer } = usePeerConnectionStore.getState();
+
+  //   (UI 표시용)
   const [status, setStatus] = useState<TransferStatus>('preparing');
-  const [primaryProgress, setPrimaryProgress] = useState(0);
-  const [secondaryProgress, setSecondaryProgress] = useState(0);
-  const [speed, setSpeed] = useState(0);
-  const [eta, setEta] = useState<number | null>(null);
-  const [transferredSize, setTransferredSize] = useState(0);
-  
-  // 상태 업데이트 로직
+
   useEffect(() => {
-    if (!message.fileMeta || !transferInfo) return;
-    
-    if (isLocalFile && activeTransfer) {
-      // === 송신 측 로직 ===
-      const metrics = activeTransfer.metrics;
-      
-      // 실제 진행률 계산
-      const actualProgress = metrics.progress || 0;
-      const sentProgress = metrics.sendProgress || 0;
-      
-      // UI 업데이트
-      setPrimaryProgress(actualProgress * 100);
-      setSecondaryProgress(sentProgress * 100);
-      
-      // 상태 결정
-      if (activeTransfer.isPaused) {
-        setStatus('paused');
-      } else if (transferInfo.isComplete || actualProgress >= 0.99) {
-        setStatus('complete');
-      } else if (actualProgress > 0.01) {
-        setStatus('transferring');
-      } else if (sentProgress > actualProgress + 0.1) {
-        setStatus('verifying');
-      } else {
-        setStatus('preparing');
-      }
-      
-      // 속도 및 ETA 계산
-      setSpeed(metrics.speed || 0);
-      setTransferredSize(actualProgress * message.fileMeta.size);
-      
-      if (metrics.speed > 0 && actualProgress < 1) {
-        const remaining = message.fileMeta.size * (1 - actualProgress);
-        setEta(remaining / metrics.speed);
-      } else {
-        setEta(null);
-      }
-      
-    } else if (!isLocalFile && transferInfo) {
-      // === 수신 측 로직 ===
-      const receivedProgress = transferInfo.progress * 100;
-      
-      setPrimaryProgress(receivedProgress);
-      setSecondaryProgress(receivedProgress);
-      
-      if (transferInfo.isComplete) {
-        setStatus('complete');
-      } else if (receivedProgress < 5) {
-        setStatus('preparing');
-      } else {
-        setStatus('transferring');
-      }
-      
-      setTransferredSize(message.fileMeta.size * transferInfo.progress);
-      
-      // 수신 속도 계산
-      const chunks = transferInfo.receivedChunks?.size || 0;
-      const elapsed = (Date.now() - message.timestamp) / 1000;
-      if (elapsed > 0 && chunks > 0) {
-        const bytesReceived = chunks * (message.fileMeta.chunkSize || 65536);
-        const currentSpeed = bytesReceived / elapsed;
-        setSpeed(currentSpeed);
-        
-        if (currentSpeed > 0 && transferInfo.progress < 1) {
-          const remaining = message.fileMeta.size * (1 - transferInfo.progress);
-          setEta(remaining / currentSpeed);
-        }
-      }
-    } else if (transferInfo?.isComplete) {
+    if (!transferProgress || !message.fileMeta) return;
+
+    if (transferProgress.isCancelled) {
+      setStatus('cancelled');
+      return;
+    }
+    if (transferProgress.isComplete) {
       setStatus('complete');
-      setPrimaryProgress(100);
-      setSecondaryProgress(100);
+      return;
     }
-    
-  }, [
-    message,
-    transferInfo,
-    activeTransfer?.metrics,
-    activeTransfer?.metrics?.progress,
-    activeTransfer?.metrics?.sendProgress,
-    activeTransfer?.metrics?.lastUpdateTime,
-    activeTransfer?.isPaused,
-    isLocalFile
-  ]);
 
-  if (!message.fileMeta || !transferInfo) return null;
-
-  const { name, size } = message.fileMeta;
-  const { isComplete, blobUrl } = transferInfo;
-
-  // 상태별 색상
-  const getStatusColor = () => {
-    switch (status) {
-      case 'preparing': return 'text-yellow-500';
-      case 'transferring': return 'text-blue-500';
-      case 'verifying': return 'text-purple-500';
-      case 'complete': return 'text-green-500';
-      case 'paused': return 'text-orange-500';
-      case 'error': return 'text-red-500';
-      default: return 'text-muted-foreground';
+    if (isSender) {
+      //  
+      const metrics = activeTransfer?.metrics;
+      if (activeTransfer?.isPaused) {
+        setStatus('paused');
+      } else if (metrics) {
+        // 송신 진행률과 확인된 진행률 차이가 크면 '검증 중'으로 표시
+        setStatus(metrics.sendProgress > metrics.progress + 0.05 ? 'verifying' : 'transferring');
+      } else {
+        setStatus('preparing');
+      }
+    } else {
+      //  
+      setStatus('transferring');
     }
-  };
+  }, [isSender, transferProgress, activeTransfer, message.fileMeta]);
+
+  if (!message.fileMeta || !transferProgress) {
+    return (
+        <Card className="p-4 bg-secondary/50">
+            <div className="flex items-center gap-3"><Loader2 className="w-6 h-6 text-primary animate-spin" /> <p>Loading file info...</p></div>
+        </Card>
+    );
+  }
+
+  const { name, size, totalChunks } = message.fileMeta;
+  const { progress, isComplete, blobUrl, isCancelled, speed, eta, averageSpeed, totalTransferTime } = transferProgress;
+  const { metrics, isPaused } = activeTransfer || {};
 
   const getStatusIcon = () => {
     switch (status) {
-      case 'preparing': return <Clock className="w-4 h-4 animate-pulse" />;
-      case 'transferring': return isLocalFile ? 
-        <Upload className="w-4 h-4 animate-pulse" /> : 
-        <Download className="w-4 h-4 animate-pulse" />;
-      case 'verifying': return <AlertCircle className="w-4 h-4 animate-spin" />;
-      case 'complete': return <CheckCircle className="w-4 h-4" />;
-      case 'paused': return <Pause className="w-4 h-4" />;
-      case 'error': return <AlertCircle className="w-4 h-4" />;
+      case 'preparing': return <Clock className="w-4 h-4 animate-pulse text-yellow-500" />;
+      case 'transferring': return isSender ? <Upload className="w-4 h-4 animate-pulse text-blue-500" /> : <Download className="w-4 h-4 animate-pulse text-blue-500" />;
+      case 'verifying': return <Loader2 className="w-4 h-4 animate-spin text-purple-500" />;
+      case 'paused': return <Pause className="w-4 h-4 text-orange-500" />;
+      case 'complete': return <CheckCircle className="w-4 h-4 text-green-500" />;
+      case 'cancelled': return <X className="w-4 h-4 text-destructive" />;
+      default: return <AlertCircle className="w-4 h-4 text-red-500" />;
     }
   };
 
   const getStatusText = () => {
     switch (status) {
       case 'preparing': return 'Preparing...';
-      case 'transferring': return isLocalFile ? 'Uploading' : 'Downloading';
+      case 'transferring': return isSender ? 'Sending...' : 'Receiving...';
       case 'verifying': return 'Verifying...';
-      case 'complete': return 'Complete';
       case 'paused': return 'Paused';
-      case 'error': return 'Failed';
+      case 'complete': return 'Complete';
+      case 'cancelled': return 'Cancelled';
+      default: return 'Error';
     }
   };
 
-  const handlePauseResume = () => {
-    if (activeTransfer?.isPaused) {
-      resumeFileTransfer(message.id);
-    } else {
-      pauseFileTransfer(message.id);
-    }
-  };
+  const ackedProgress = (metrics?.progress ?? 0) * 100;
+  const sentProgress = (metrics?.sendProgress ?? 0) * 100;
+  const receivedProgress = progress * 100;
+
+  const transferredSize = isSender ? (metrics?.ackedSize ?? 0) : (progress * size);
+
+  const finalAverageSpeed = isSender ? (metrics?.averageSpeed ?? 0) : averageSpeed;
+  const finalTotalTime = isSender ? (metrics?.totalTransferTime ?? 0) : (totalTransferTime / 1000);
 
   return (
     <div className="w-full max-w-[85%] space-y-1">
       <Card className="p-4 bg-secondary/50 backdrop-blur-sm border-border/50">
-        {/* 파일 정보 헤더 */}
         <div className="flex items-start gap-3 mb-3">
-          <div className="flex-shrink-0 p-2.5 bg-primary/10 rounded-lg">
-            <File className="w-6 h-6 text-primary" />
-          </div>
+          <div className="flex-shrink-0 p-2.5 bg-primary/10 rounded-lg"><File className="w-6 h-6 text-primary" /></div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate text-foreground">{name}</p>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{formatFileSize(size)}</span>
-              <span>•</span>
-              <div className={cn("flex items-center gap-1", getStatusColor())}>
-                {getStatusIcon()}
-                <span>{getStatusText()}</span>
-              </div>
+              <span>{formatFileSize(size)}</span><span className="flex items-center gap-1">{getStatusIcon()} {getStatusText()}</span>
             </div>
           </div>
-          
-          {/* 컨트롤 버튼 */}
-          {isLocalFile && !isComplete && (
+          {isSender && !isComplete && !isCancelled && (
             <div className="flex gap-1">
-              {activeTransfer && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handlePauseResume}
-                  disabled={status === 'preparing'}
-                >
-                  {activeTransfer.isPaused ? 
-                    <Play className="w-4 h-4" /> : 
-                    <Pause className="w-4 h-4" />
-                  }
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => cancelFileTransfer(message.id)}
-              >
-                <X className="w-4 h-4" />
-              </Button>
+              <Button size="sm" variant="ghost" onClick={() => isPaused ? resumeFileTransfer(transferId) : pauseFileTransfer(transferId)}>{isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}</Button>
+              <Button size="sm" variant="ghost" onClick={() => cancelFileTransfer(transferId)}><X className="w-4 h-4" /></Button>
             </div>
           )}
         </div>
-        
-        {/* 진행 상태 */}
-        {!isComplete && (
+
+        {!isComplete && !isCancelled && (
           <div className="space-y-3">
-            {/* 프로그레스 바 */}
-            {isLocalFile && secondaryProgress > primaryProgress + 5 ? (
-              // 송신측: 이중 프로그레스
+            {isSender && metrics && sentProgress > ackedProgress + 1 ? (
               <div className="space-y-1">
-                <div className="relative">
-                  <Progress 
-                    value={secondaryProgress} 
-                    className="h-2 opacity-30"
-                  />
-                  <Progress 
-                    value={primaryProgress} 
-                    className="h-2 absolute inset-0"
-                  />
-                </div>
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Confirmed: {primaryProgress.toFixed(0)}%</span>
-                  <span className="text-muted-foreground/50">Sent: {secondaryProgress.toFixed(0)}%</span>
-                </div>
+                <div className="relative h-2"><Progress value={sentProgress} className="h-2 absolute inset-0 opacity-30" /><Progress value={ackedProgress} className="h-2 absolute inset-0" /></div>
+                <div className="flex justify-between text-xs text-muted-foreground"><span>Confirmed: {ackedProgress.toFixed(0)}%</span><span className="text-muted-foreground/70">Sent: {sentProgress.toFixed(0)}%</span></div>
               </div>
             ) : (
-              // 일반 프로그레스
               <div className="space-y-1">
-                <Progress value={primaryProgress} className="h-2" />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>{formatFileSize(transferredSize)} / {formatFileSize(size)}</span>
-                  <span>{primaryProgress.toFixed(0)}%</span>
-                </div>
+                <Progress value={isSender ? ackedProgress : receivedProgress} className="h-2" />
+                <div className="flex justify-between text-xs text-muted-foreground"><span>{formatFileSize(transferredSize)} / {formatFileSize(size)}</span><span>{(isSender ? ackedProgress : receivedProgress).toFixed(0)}%</span></div>
               </div>
             )}
-            
-            {/* 전송 통계 */}
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-3 text-muted-foreground">
-                {speed > 0 && (
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                    {formatSpeed(speed)}
-                  </span>
-                )}
-                {eta !== null && eta > 0 && (
-                  <span>ETA: {formatTime(eta)}</span>
-                )}
-              </div>
-              
-              {/* 청크 정보 (송신측) */}
-              {isLocalFile && activeTransfer?.metrics && (
-                <div className="text-muted-foreground/70">
-                  {activeTransfer.metrics.chunksAcked}/{activeTransfer.metrics.totalChunks} chunks
-                </div>
-              )}
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className={cn("font-medium", (isSender ? (metrics?.speed ?? 0) : speed) > 0 ? "text-green-400" : "text-muted-foreground")}>
+                {formatSpeed(isSender ? (metrics?.speed ?? 0) : speed)}
+              </span>
+              <span>ETA: {formatETA(isSender ? (metrics?.eta ?? Infinity) : eta)}</span>
+              {isSender && metrics && <span>{metrics.chunksAcked}/{totalChunks} chunks</span>}
             </div>
-
-            {/* 상태 메시지 */}
-            {status === 'verifying' && (
-              <div className="text-xs text-purple-500 animate-pulse text-center">
-                Waiting for confirmation...
-              </div>
-            )}
-            
-            {status === 'preparing' && (
-              <div className="text-xs text-yellow-500 animate-pulse text-center">
-                Establishing connection...
-              </div>
-            )}
-            
-            {status === 'paused' && (
-              <div className="text-xs text-orange-500 text-center">
-                Transfer paused - Click play to resume
-              </div>
-            )}
           </div>
         )}
-        
-        {/* 완료 상태 */}
+
         {isComplete && (
-          <div className="mt-3 space-y-2">
-            {blobUrl && (
-              <Button asChild size="sm" className="w-full">
-                <a href={blobUrl} download={name}>
-                  <Download className="w-4 h-4 mr-2" />
-                  Download File
-                </a>
-              </Button>
-            )}
-            
-            <div className="text-xs text-green-500 flex items-center gap-1 justify-center">
-              <CheckCircle className="w-3 h-3" />
-              Transfer complete
+          <>
+            <div className="mt-3 space-y-2">
+                {blobUrl && !isSender ? (
+                <Button asChild size="sm" className="w-full"><a href={blobUrl} download={name}><Download className="w-4 h-4 mr-2" /> Download File</a></Button>
+                ) : isSender ? (
+                <div className="text-xs text-green-500 flex items-center gap-1 justify-center"><CheckCircle className="w-3 h-3" /> Sent successfully</div>
+                ) : null}
             </div>
-          </div>
+            <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
+                <span>Avg. Speed: {formatSpeed(finalAverageSpeed)}</span>
+                <span>Time: {finalTotalTime.toFixed(1)}s</span>
+            </div>
+          </>
+        )}
+
+        {isCancelled && (
+            <div className="text-xs text-destructive flex items-center gap-1 justify-center mt-3"><AlertCircle className="w-3 h-3" /> Transfer cancelled</div>
         )}
       </Card>
-      
-      {/* 메시지 메타데이터 */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground pl-2">
-        <span>{message.senderNickname}</span>
-        <span>•</span>
-        <span>{new Date(message.timestamp).toLocaleTimeString([], { 
-          hour: '2-digit', 
-          minute: '2-digit' 
-        })}</span>
+        <span>{message.senderNickname}</span><span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       </div>
     </div>
   );

@@ -1,9 +1,18 @@
+/**
+ * @fileoverview       Zustand  (v2.2.3 - Chrono-Filter Calibrated)
+ * @module stores/useChatStore
+ * @description v2.2.3: EMA 스무딩 필터와 실시간 감시자(Stall Detector)를 도입하여
+ *              수신 UI의 속도/ETA 표시가 멈추거나 널뛰는 현상을 완벽하게 해결.
+ */
+
 import { create } from 'zustand';
 import { produce } from 'immer';
-import { useWhiteboardStore } from './useWhiteboardStore';
-import { initDB, saveChunk, getAndAssembleFile, deleteFileChunks } from '@/lib/indexedDBHelper';
 import { usePeerConnectionStore } from './usePeerConnectionStore';
-import { isValidChunkIndex } from '@/lib/fileTransferUtils';
+import { initDB, saveChunk, getAndAssembleFile, deleteFileChunks } from '@/lib/indexedDBHelper';
+import { toast } from 'sonner';
+
+// EMA 스무딩 계수 (값이 작을수록 부드러움)
+const SMOOTHING_ALPHA = 0.15;
 
 export interface FileMetadata {
   transferId: string;
@@ -11,7 +20,7 @@ export interface FileMetadata {
   size: number;
   type: string;
   totalChunks: number;
-  chunkSize?: number;
+  chunkSize: number;
 }
 
 export interface FileTransferProgress {
@@ -19,13 +28,19 @@ export interface FileTransferProgress {
   isSending: boolean;
   isReceiving: boolean;
   isComplete: boolean;
+  isCancelled?: boolean;
   blobUrl?: string;
   senderId: string;
   receivedChunks: Set<number>;
   endSignalReceived: boolean;
   lastActivityTime: number;
-  missingChunks?: number[];
-  lastProgressUpdate?: number;
+  lastReceivedSize?: number;
+  speed: number;
+  eta: number;
+  averageSpeed: number;
+  totalTransferTime: number;
+  // v2.2.3: 실시간 감시자(Stall Detector)를 위한 필드
+  speedMonitorInterval: NodeJS.Timeout | null;
 }
 
 export type MessageType = 'text' | 'file';
@@ -40,51 +55,48 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+const HEADER_TYPE_OFFSET = 0;
+const HEADER_ID_LEN_OFFSET = 1;
+const HEADER_ID_OFFSET = 3;
+
+function parseChunkHeader(buffer: ArrayBuffer): { type: number; transferId: string; chunkIndex?: number; data?: ArrayBuffer } | null {
+    if (buffer.byteLength < HEADER_ID_OFFSET) return null;
+    const view = new DataView(buffer);
+    const type = view.getUint8(HEADER_TYPE_OFFSET);
+    const idLength = view.getUint16(HEADER_ID_LEN_OFFSET, false);
+    const headerBaseSize = HEADER_ID_OFFSET + idLength;
+    if (buffer.byteLength < headerBaseSize) return null;
+    const transferIdBytes = new Uint8Array(buffer, HEADER_ID_OFFSET, idLength);
+    const transferId = new TextDecoder().decode(transferIdBytes);
+
+    if (type === 1) {
+        const dataHeaderSize = headerBaseSize + 4;
+        if (buffer.byteLength < dataHeaderSize) return null;
+        const chunkIndex = view.getUint32(headerBaseSize, false);
+        const data = buffer.slice(dataHeaderSize);
+        return { type, transferId, chunkIndex, data };
+    } else if (type === 2) {
+        return { type, transferId };
+    }
+    return null;
+}
+
 interface ChatState {
   chatMessages: ChatMessage[];
   isTyping: Map<string, string>;
   fileTransfers: Map<string, FileTransferProgress>;
   pendingChunks: Map<string, ArrayBuffer[]>;
-  endSignalsReceived: Set<string>;
-  progressUpdateTimers: Map<string, NodeJS.Timeout>;
 }
 
 interface ChatActions {
   addMessage: (message: ChatMessage) => void;
   addFileMessage: (senderId: string, senderNickname: string, fileMeta: FileMetadata, isLocal?: boolean) => Promise<void>;
-  updateFileProgress: (transferId: string, loaded: number, immediate?: boolean) => void;
-  appendFileChunk: (transferId: string, index: number, chunk: ArrayBuffer, senderId: string, isLastChunk?: boolean) => Promise<void>;
-  addPendingChunk: (transferId: string, chunk: ArrayBuffer) => void;
-  processPendingChunks: (transferId: string) => Promise<void>;
   handleIncomingChunk: (peerId: string, receivedData: ArrayBuffer | Uint8Array) => Promise<void>;
   checkAndAssembleIfComplete: (transferId: string) => Promise<void>;
   setTypingState: (userId: string, nickname: string, isTyping: boolean) => void;
-  applyRemoteDrawEvent: (event: any) => void;
   clearChat: () => void;
-}
-
-function parseChunkHeader(buffer: ArrayBuffer): { type: number; transferId: string; chunkIndex?: number; data?: ArrayBuffer } | null {
-  if (buffer.byteLength < 3) return null;
-  
-  const view = new DataView(buffer);
-  const type = view.getUint8(0);
-  const idLength = view.getUint16(1, false);
-  
-  if (buffer.byteLength < 3 + idLength) return null;
-  
-  const transferIdBytes = new Uint8Array(buffer, 3, idLength);
-  const transferId = new TextDecoder().decode(transferIdBytes);
-  
-  if (type === 1) {
-    if (buffer.byteLength < 3 + idLength + 4) return null;
-    const chunkIndex = view.getUint32(3 + idLength, false);
-    const data = buffer.slice(3 + idLength + 4);
-    return { type, transferId, chunkIndex, data };
-  } else if (type === 2) {
-    return { type, transferId };
-  }
-  
-  return null;
+  updateFileTransferState: (transferId: string, updates: Partial<FileTransferProgress>) => void;
+  handleFileCancel: (transferId: string) => Promise<void>;
 }
 
 export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
@@ -92,427 +104,197 @@ export const useChatStore = create<ChatState & ChatActions>((set, get) => ({
   isTyping: new Map(),
   fileTransfers: new Map(),
   pendingChunks: new Map(),
-  endSignalsReceived: new Set(),
-  progressUpdateTimers: new Map(),
-
-  handleIncomingChunk: async (peerId, receivedData) => {
-    const chunkBuffer = (receivedData instanceof Uint8Array)
-        ? receivedData.slice().buffer
-        : receivedData;
-
-    if (!(chunkBuffer instanceof ArrayBuffer) || chunkBuffer.byteLength < 1) {
-        console.warn('[FILE_RECEIVE] Invalid chunk buffer received');
-        return;
-    }
-
-    const parsed = parseChunkHeader(chunkBuffer);
-    if (!parsed) {
-      console.warn('[FILE_RECEIVE] Failed to parse chunk header');
-      return;
-    }
-
-    const { type, transferId, chunkIndex, data } = parsed;
-    const { fileTransfers, chatMessages, appendFileChunk, addPendingChunk, endSignalsReceived } = get();
-    
-    const transfer = fileTransfers.get(transferId);
-    const message = chatMessages.find(m => m.id === transferId);
-    
-    if (!transfer || !message) {
-      console.log(`[FILE_RECEIVE] Transfer not found for ${transferId}, adding to pending`);
-      addPendingChunk(transferId, chunkBuffer);
-      return;
-    }
-
-    if (type === 1 && typeof chunkIndex === 'number' && data) {
-      if (message.fileMeta && !isValidChunkIndex(chunkIndex, message.fileMeta.totalChunks)) {
-        console.error(`[FILE_RECEIVE] Invalid chunk index: ${chunkIndex} for transfer ${transferId}`);
-        return;
-      }
-      
-      console.log(`[FILE_RECEIVE] Data chunk received: ${chunkIndex} for ${transferId}, size: ${data.byteLength}`);
-      await appendFileChunk(transferId, chunkIndex, data, message.senderId, false);
-      
-    } else if (type === 2) {
-      if (!endSignalsReceived.has(transferId)) {
-        endSignalsReceived.add(transferId);
-        console.log(`[FILE_RECEIVE] End signal received for ${transferId}`);
-        
-        set(produce((state: ChatState) => {
-          const transfer = state.fileTransfers.get(transferId);
-          if (transfer) {
-            transfer.endSignalReceived = true;
-          }
-        }));
-        
-        setTimeout(() => {
-          get().checkAndAssembleIfComplete(transferId);
-        }, 1000);
-      } else {
-        console.log(`[FILE_RECEIVE] Duplicate End signal ignored for ${transferId}`);
-      }
-    }
-  },
-
-  addPendingChunk: (transferId, chunk) => set(produce((state: ChatState) => {
-    if (!state.pendingChunks.has(transferId)) {
-      state.pendingChunks.set(transferId, []);
-    }
-    state.pendingChunks.get(transferId)!.push(chunk);
-    
-    const pending = state.pendingChunks.get(transferId)!;
-    if (pending.length > 1000) {
-      console.warn(`[FILE_RECEIVE] Too many pending chunks for ${transferId}, clearing old ones`);
-      state.pendingChunks.set(transferId, pending.slice(-500));
-    }
-  })),
-
-  processPendingChunks: async (transferId) => {
-    const pending = get().pendingChunks.get(transferId);
-    if (pending && pending.length > 0) {
-      console.log(`[FILE_RECEIVE] Processing ${pending.length} pending chunks for ${transferId}`);
-      
-      const { chatMessages, endSignalsReceived } = get();
-      const message = chatMessages.find(m => m.id === transferId);
-      
-      for (const chunkBuffer of pending) {
-        const parsed = parseChunkHeader(chunkBuffer);
-        if (!parsed) continue;
-        
-        const { type, chunkIndex, data } = parsed;
-        
-        if (type === 1 && typeof chunkIndex === 'number' && data) {
-          if (message?.fileMeta && !isValidChunkIndex(chunkIndex, message.fileMeta.totalChunks)) {
-            console.error(`[FILE_RECEIVE] Invalid pending chunk index: ${chunkIndex}`);
-            continue;
-          }
-          
-          await get().appendFileChunk(transferId, chunkIndex, data, message!.senderId, false);
-        } else if (type === 2) {
-          if (!endSignalsReceived.has(transferId)) {
-            endSignalsReceived.add(transferId);
-            console.log(`[FILE_RECEIVE] Found End signal in pending chunks for ${transferId}`);
-            set(produce((state: ChatState) => {
-              const transfer = state.fileTransfers.get(transferId);
-              if (transfer) {
-                transfer.endSignalReceived = true;
-              }
-            }));
-          }
-        }
-      }
-      
-      set(produce((state: ChatState) => { 
-        state.pendingChunks.delete(transferId); 
-      }));
-      
-      setTimeout(() => {
-        get().checkAndAssembleIfComplete(transferId);
-      }, 500);
-    }
-  },
-
-  addFileMessage: async (senderId, senderNickname, fileMeta, isLocal = false) => {
-    console.log(`[FILE_RECEIVE] Adding file message: ${fileMeta.transferId}, isLocal: ${isLocal}, totalChunks: ${fileMeta.totalChunks}`);
-    
-    const existingMessage = get().chatMessages.find(msg => msg.id === fileMeta.transferId);
-    if (existingMessage) {
-      console.log(`[FILE_RECEIVE] File message already exists: ${fileMeta.transferId}`);
-      return;
-    }
-    
-    set(produce((state: ChatState) => {
-      const newFileMessage: ChatMessage = { 
-        id: fileMeta.transferId, 
-        type: 'file', 
-        fileMeta, 
-        senderId, 
-        senderNickname, 
-        timestamp: Date.now() 
-      };
-      
-      state.chatMessages.push(newFileMessage);
-      
-      state.fileTransfers.set(fileMeta.transferId, {
-        progress: 0, 
-        isSending: isLocal, 
-        isReceiving: !isLocal, 
-        isComplete: false,
-        senderId, 
-        receivedChunks: new Set(), 
-        endSignalReceived: false,
-        lastActivityTime: Date.now(),
-        missingChunks: [],
-        lastProgressUpdate: Date.now()
-      });
-    }));
-    
-    if (!isLocal) {
-      await initDB();
-      await get().processPendingChunks(fileMeta.transferId);
-    }
-  },
 
   addMessage: (message) => set(produce((state: ChatState) => {
     if (!state.chatMessages.some((msg) => msg.id === message.id)) {
       state.chatMessages.push(message);
     }
   })),
-  
-  // 🔥 핵심 수정: 즉시 업데이트 지원
-  updateFileProgress: (transferId, loaded, immediate = false) => {
-    const { progressUpdateTimers } = get();
+
+  addFileMessage: async (senderId, senderNickname, fileMeta, isLocal = false) => {
+    if (get().fileTransfers.has(fileMeta.transferId)) return;
+    const newFileMessage: ChatMessage = { id: fileMeta.transferId, type: 'file', fileMeta, senderId, senderNickname, timestamp: Date.now() };
     
-    // 기존 타이머 클리어
-    const existingTimer = progressUpdateTimers.get(transferId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
-    
-    const doUpdate = () => {
-      set(produce((state) => {
-        const transfer = state.fileTransfers.get(transferId);
-        const message = state.chatMessages.find((m) => m.id === transferId);
-        
-        if (transfer && message?.fileMeta) {
-          const newProgress = Math.min(1, loaded / message.fileMeta.size);
-          
-          // 부드러운 진행률 업데이트 - 0.1% 이상 변경 시에만 업데이트
-          if (Math.abs(newProgress - transfer.progress) > 0.001 || newProgress >= 1) {
-            transfer.progress = newProgress;
-            transfer.lastActivityTime = Date.now();
-            transfer.lastProgressUpdate = Date.now();
-            
-            // 디버그 로그 (5% 단위로만)
-            const prevPercent = Math.floor(transfer.progress * 20);
-            const newPercent = Math.floor(newProgress * 20);
-            if (prevPercent !== newPercent) {
-              console.log(`[FILE_PROGRESS] ${transferId}: ${(newProgress * 100).toFixed(1)}%`);
+    // v2.2.3: 감시자 초기화
+    let speedMonitorInterval: NodeJS.Timeout | null = null;
+    if (!isLocal) {
+        speedMonitorInterval = setInterval(() => {
+            const transfer = get().fileTransfers.get(fileMeta.transferId);
+            if (transfer && !transfer.isComplete && !transfer.isCancelled) {
+                const now = Date.now();
+                if (now - transfer.lastActivityTime > 1500) { // 1.5초 이상 활동 없으면
+                    set(produce((state: ChatState) => {
+                        const t = state.fileTransfers.get(fileMeta.transferId);
+                        if (t && t.speed > 0) {
+                            t.speed = 0;
+                            t.eta = Infinity;
+                        }
+                    }));
+                }
             }
-          }
-          
-          // 완료 체크
-          if (newProgress >= 1 && !transfer.isComplete) {
-            transfer.isComplete = true;
-            transfer.isSending = false;
-            console.log(`[FILE_PROGRESS] Upload complete: ${transferId}`);
-          }
-        }
-        
-        // 타이머 정리
-        state.progressUpdateTimers.delete(transferId);
-      }));
-    };
+        }, 1000);
+    }
+
+    const newTransferProgress: FileTransferProgress = { progress: 0, isSending: isLocal, isReceiving: !isLocal, isComplete: false, isCancelled: false, senderId, receivedChunks: new Set(), endSignalReceived: false, lastActivityTime: Date.now(), lastReceivedSize: 0, speed: 0, eta: Infinity, averageSpeed: 0, totalTransferTime: 0, speedMonitorInterval };
     
-    if (immediate) {
-      doUpdate(); // 즉시 실행
-    } else {
-      // 송신 시 더 빠른 업데이트 (50ms)
-      const transfer = get().fileTransfers.get(transferId);
-      const delay = transfer?.isSending ? 50 : 100;
-      const timer = setTimeout(doUpdate, delay);
-      set(produce(state => {
-        state.progressUpdateTimers.set(transferId, timer);
-      }));
+    set(produce((state: ChatState) => {
+        state.chatMessages.push(newFileMessage);
+        state.fileTransfers.set(fileMeta.transferId, newTransferProgress);
+    }));
+
+    if (!isLocal) {
+        await initDB();
+        const pending = get().pendingChunks.get(fileMeta.transferId);
+        if (pending) {
+            console.log(`[ChatStore] Processing ${pending.length} pending chunks for ${fileMeta.transferId}`);
+            for (const chunk of pending) { await get().handleIncomingChunk(senderId, chunk); }
+            set(produce(state => { state.pendingChunks.delete(fileMeta.transferId) }));
+        }
     }
   },
-  
-  appendFileChunk: async (transferId, index, chunk, senderId, isLastChunk = false) => {
+
+  handleIncomingChunk: async (peerId, receivedData) => {
+    const chunkBuffer = (receivedData instanceof Uint8Array) ? receivedData.buffer.slice(receivedData.byteOffset, receivedData.byteOffset + receivedData.byteLength) : receivedData;
+    const parsed = parseChunkHeader(chunkBuffer);
+    if (!parsed) { console.warn('[ChatStore] Failed to parse chunk header.'); return; }
+    const { type, transferId, chunkIndex, data } = parsed;
+    const { fileTransfers, checkAndAssembleIfComplete } = get();
+    if (!fileTransfers.has(transferId)) {
+        set(produce((state: ChatState) => {
+            if (!state.pendingChunks.has(transferId)) state.pendingChunks.set(transferId, []);
+            state.pendingChunks.get(transferId)!.push(chunkBuffer);
+        }));
+        return;
+    }
+    const transfer = fileTransfers.get(transferId)!;
+    if (transfer.isComplete || transfer.isCancelled) return;
+    if (type === 1 && typeof chunkIndex === 'number' && data) {
+        if (transfer.receivedChunks.has(chunkIndex)) return;
+        try {
+            await saveChunk(transferId, chunkIndex, data);
+            usePeerConnectionStore.getState().sendToPeer(peerId, JSON.stringify({ type: 'file-ack', payload: { transferId, chunkIndex } }));
+            set(produce((state: ChatState) => {
+                const currentTransfer = state.fileTransfers.get(transferId);
+                const message = state.chatMessages.find(m => m.id === transferId);
+                if (currentTransfer && message?.fileMeta) {
+                    currentTransfer.receivedChunks.add(chunkIndex);
+                    
+                    const now = Date.now();
+                    const elapsed = (now - currentTransfer.lastActivityTime) / 1000;
+                    const receivedBytesSinceLastUpdate = data.byteLength;
+
+                    // v2.2.3: EMA 스무딩 필터 적용
+                    if (elapsed > 0.01) { // 너무 짧은 간격은 무시
+                        const instantaneousSpeed = receivedBytesSinceLastUpdate / elapsed;
+                        const previousSpeed = currentTransfer.speed;
+                        const newSmoothedSpeed = (instantaneousSpeed * SMOOTHING_ALPHA) + (previousSpeed * (1 - SMOOTHING_ALPHA));
+                        
+                        currentTransfer.speed = newSmoothedSpeed;
+                        
+                        const totalReceived = (currentTransfer.lastReceivedSize || 0) + receivedBytesSinceLastUpdate;
+                        const remainingBytes = message.fileMeta.size - totalReceived;
+                        currentTransfer.eta = newSmoothedSpeed > 0 ? remainingBytes / newSmoothedSpeed : Infinity;
+                    }
+
+                    currentTransfer.progress = currentTransfer.receivedChunks.size / message.fileMeta.totalChunks;
+                    currentTransfer.lastReceivedSize = (currentTransfer.lastReceivedSize || 0) + data.byteLength;
+                    currentTransfer.lastActivityTime = now;
+                }
+            }));
+        } catch (error) { console.error(`[ChatStore] Failed to save chunk ${chunkIndex}:`, error); }
+    } else if (type === 2) {
+        if (!transfer.endSignalReceived) {
+            set(produce((state: ChatState) => { state.fileTransfers.get(transferId)!.endSignalReceived = true; }));
+            console.log(`[ChatStore] End signal received for ${transferId}.`);
+            setTimeout(() => checkAndAssembleIfComplete(transferId), 1000);
+        }
+    }
+  },
+
+  checkAndAssembleIfComplete: async (transferId: string) => {
     const { fileTransfers, chatMessages } = get();
     const transfer = fileTransfers.get(transferId);
     const message = chatMessages.find(m => m.id === transferId);
+    if (!transfer || !message?.fileMeta || transfer.isComplete || transfer.isCancelled) return;
     
-    if (!transfer || !message?.fileMeta) {
-      console.error(`[FILE_RECEIVE] Transfer or message not found: ${transferId}`);
-      return;
+    // v2.2.3: 감시자 정리
+    if (transfer.speedMonitorInterval) {
+        clearInterval(transfer.speedMonitorInterval);
     }
-  
-    if (transfer.receivedChunks.has(index)) {
-      return;
+    
+    const isReadyToAssemble = transfer.endSignalReceived && transfer.receivedChunks.size >= message.fileMeta.totalChunks;
+    if (isReadyToAssemble) {
+        console.log(`[ChatStore] Assembling file: ${transferId}`);
+        try {
+            const blob = await getAndAssembleFile(transferId, message.fileMeta.type);
+            if (blob && Math.abs(blob.size - message.fileMeta.size) < 1024) {
+                const totalTransferTime = Date.now() - message.timestamp;
+                const averageSpeed = totalTransferTime > 0 ? message.fileMeta.size / (totalTransferTime / 1000) : 0;
+
+                set(produce((state: ChatState) => {
+                    const t = state.fileTransfers.get(transferId);
+                    if (t) { 
+                        t.isComplete = true; 
+                        t.isReceiving = false; 
+                        t.progress = 1; 
+                        t.blobUrl = URL.createObjectURL(blob);
+                        t.speed = 0;
+                        t.eta = 0;
+                        t.averageSpeed = averageSpeed;
+                        t.totalTransferTime = totalTransferTime;
+                        t.speedMonitorInterval = null; // 정리
+                    }
+                }));
+
+                usePeerConnectionStore.getState().sendToPeer(transfer.senderId, JSON.stringify({
+                    type: 'TRANSFER_COMPLETE_ACK',
+                    payload: { transferId }
+                }));
+
+                toast.success(`File "${message.fileMeta.name}" received successfully!`);
+                await deleteFileChunks(transferId);
+            } else { throw new Error(`Assembly failed or size mismatch. Expected: ${message.fileMeta.size}, Got: ${blob?.size}`); }
+        } catch (error) {
+            console.error(`[ChatStore] File assembly error for ${transferId}:`, error);
+            get().updateFileTransferState(transferId, { isReceiving: false, isCancelled: true });
+            toast.error(`Failed to assemble file: ${message.fileMeta.name}`);
+        }
     }
-  
-    if (!isValidChunkIndex(index, message.fileMeta.totalChunks)) {
-      console.error(`[FILE_RECEIVE] Invalid chunk index: ${index}`);
-      return;
-    }
-  
-    if (!isLastChunk && index >= 0) {
-      const { sendToPeer } = usePeerConnectionStore.getState();
-      const ackMessage = JSON.stringify({
-        type: 'file-ack',
-        payload: { transferId, chunkIndex: index }
-      });
-      
-      const ackSent = sendToPeer(senderId, ackMessage);
-      if (!ackSent) {
-        console.warn(`[FILE_RECEIVE] Failed to send ACK for chunk ${index}`);
-        setTimeout(() => {
-          sendToPeer(senderId, ackMessage);
-        }, 100);
-      }
-    }
-  
-    if (!isLastChunk && index >= 0) {
-      saveChunk(transferId, index, chunk).catch(error => {
-        console.error(`[FILE_RECEIVE] Failed to save chunk ${index}:`, error);
-      });
-    }
-  
+  },
+    
+  setTypingState: (userId, nickname, isTyping) => set(produce((state: ChatState) => {
+    if (isTyping) state.isTyping.set(userId, nickname);
+    else state.isTyping.delete(userId);
+  })),
+
+  updateFileTransferState: (transferId, updates) => {
     set(produce((state: ChatState) => {
       const transfer = state.fileTransfers.get(transferId);
-      if (!transfer) return;
-  
-      transfer.receivedChunks.add(index);
-      
-      const message = state.chatMessages.find(m => m.id === transferId);
-      if (message?.fileMeta) {
-        const receivedCount = transfer.receivedChunks.size;
-        const totalCount = message.fileMeta.totalChunks;
-        
-        const rawProgress = receivedCount / totalCount;
-        const smoothedProgress = transfer.progress * 0.3 + rawProgress * 0.7;
-        
-        transfer.progress = Math.min(smoothedProgress, rawProgress);
-        transfer.lastActivityTime = Date.now();
-        
-        if (Math.floor(rawProgress * 20) !== Math.floor((transfer.progress || 0) * 20)) {
-          console.log(
-            `[FILE_RECEIVE] Progress: ${(rawProgress * 100).toFixed(1)}% ` +
-            `(${receivedCount}/${totalCount} chunks)`
-          );
-        }
-      }
+      if (transfer) { Object.assign(transfer, updates); }
     }));
-    
-    const updatedTransfer = get().fileTransfers.get(transferId);
-    if (updatedTransfer && message?.fileMeta) {
-      const receivedCount = updatedTransfer.receivedChunks.size;
-      const totalCount = message.fileMeta.totalChunks;
-      
-      if (receivedCount === totalCount || updatedTransfer.endSignalReceived) {
-        setTimeout(() => {
-          get().checkAndAssembleIfComplete(transferId);
-        }, 100);
-      }
-    }
   },
 
-  checkAndAssembleIfComplete: async (transferId) => {
-    const state = get();
-    const transfer = state.fileTransfers.get(transferId);
-    const message = state.chatMessages.find(m => m.id === transferId);
-
-    if (!transfer || !message?.fileMeta || transfer.isComplete) {
-      return;
-    }
-
-    const receivedCount = transfer.receivedChunks.size;
-    const totalCount = message.fileMeta.totalChunks;
-    
-    console.log(`[FILE_RECEIVE] Checking completion for ${transferId}:`);
-    console.log(`  - Received: ${receivedCount}/${totalCount} chunks`);
-    console.log(`  - End Signal: ${transfer.endSignalReceived}`);
-    console.log(`  - Missing chunks: ${transfer.missingChunks?.length || 0}`);
-
-    const shouldAssemble = 
-      (transfer.endSignalReceived && receivedCount === totalCount) ||
-      (receivedCount === totalCount) ||
-      (transfer.endSignalReceived && receivedCount >= totalCount - 1);
-
-    if (shouldAssemble) {
-      console.log(`[FILE_RECEIVE] Starting assembly for ${transferId}`);
-      
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
-      try {
-        const blob = await getAndAssembleFile(transferId, message.fileMeta.type);
-        if (blob && blob.size > 0) {
-          console.log(`[FILE_RECEIVE] File assembled successfully: ${transferId}`);
-          console.log(`  - Expected size: ${message.fileMeta.size}`);
-          console.log(`  - Actual size: ${blob.size}`);
-          
-          const sizeDiff = Math.abs(blob.size - message.fileMeta.size);
-          const sizeMatch = sizeDiff < 1024;
-          
-          if (!sizeMatch) {
-            console.warn(`[FILE_RECEIVE] Size mismatch! Expected: ${message.fileMeta.size}, Got: ${blob.size}`);
-          }
-          
-          set(produce(s => {
-            const t = s.fileTransfers.get(transferId);
-            if (t) {
-              t.isComplete = true;
-              t.isReceiving = false;
-              t.blobUrl = URL.createObjectURL(blob);
-              t.progress = 1;
-              console.log(`[FILE_RECEIVE] Transfer marked as complete: ${transferId}`);
-            }
-            
-            s.endSignalsReceived.delete(transferId);
-          }));
-          
-          setTimeout(() => {
-            deleteFileChunks(transferId).catch(error => {
-              console.error(`[FILE_RECEIVE] Failed to delete chunks:`, error);
-            });
-          }, 1000);
-        } else {
-          console.error(`[FILE_RECEIVE] Failed to assemble file or empty blob: ${transferId}`);
-        }
-      } catch (error) {
-        console.error(`[FILE_RECEIVE] Assembly error for ${transferId}:`, error);
+  handleFileCancel: async (transferId: string) => {
+    console.log(`[ChatStore] Handling cancellation for ${transferId}`);
+    const transfer = get().fileTransfers.get(transferId);
+    if (transfer && !transfer.isComplete && !transfer.isCancelled) {
+      // v2.2.3: 감시자 정리
+      if (transfer.speedMonitorInterval) {
+          clearInterval(transfer.speedMonitorInterval);
       }
-    } else {
-      const inactiveTime = Date.now() - transfer.lastActivityTime;
-      if (inactiveTime > 30000) {
-        console.error(`[FILE_RECEIVE] Transfer timeout for ${transferId}`);
-        set(produce(s => {
-          const t = s.fileTransfers.get(transferId);
-          if (t) {
-            t.isReceiving = false;
-          }
-          s.endSignalsReceived.delete(transferId);
-        }));
-        
-        setTimeout(() => {
-          deleteFileChunks(transferId).catch(error => {
-            console.error(`[FILE_RECEIVE] Failed to delete chunks after timeout:`, error);
-          });
-        }, 1000);
-      } else if (transfer.missingChunks && transfer.missingChunks.length > 0) {
-        console.log(`[FILE_RECEIVE] Waiting for ${transfer.missingChunks.length} missing chunks...`);
-      }
+      get().updateFileTransferState(transferId, { isReceiving: false, isSending: false, isCancelled: true, speedMonitorInterval: null });
+      toast.info("A file transfer has been cancelled.");
+      await deleteFileChunks(transferId);
     }
-  },
-
-  setTypingState: (userId, nickname, isTyping) => set(produce((state: ChatState) => {
-    if (isTyping) { 
-      state.isTyping.set(userId, nickname); 
-    } else { 
-      state.isTyping.delete(userId); 
-    }
-  })),
-  
-  applyRemoteDrawEvent: (event) => {
-    useWhiteboardStore.getState().applyRemoteDrawEvent(event);
   },
 
   clearChat: () => {
-    const { progressUpdateTimers } = get();
-    progressUpdateTimers.forEach(timer => clearTimeout(timer));
-    
-    get().fileTransfers.forEach(transfer => {
-      if (transfer.blobUrl) {
-        URL.revokeObjectURL(transfer.blobUrl);
-      }
+    get().fileTransfers.forEach(async (transfer, transferId) => {
+        if (transfer.blobUrl) URL.revokeObjectURL(transfer.blobUrl);
+        // v2.2.3: 감시자 정리
+        if (transfer.speedMonitorInterval) clearInterval(transfer.speedMonitorInterval);
+        await deleteFileChunks(transferId);
     });
-    
-    set({ 
-      chatMessages: [], 
-      isTyping: new Map(), 
-      fileTransfers: new Map(), 
-      pendingChunks: new Map(),
-      endSignalsReceived: new Set(),
-      progressUpdateTimers: new Map()
-    });
+    set({ chatMessages: [], isTyping: new Map(), fileTransfers: new Map(), pendingChunks: new Map() });
   },
 }));
