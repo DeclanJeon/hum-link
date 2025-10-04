@@ -15,6 +15,18 @@ interface ScreenShareResources {
   animationFrameId: number | null;
 }
 
+/**
+ * 파일 스트리밍을 위한 원본 미디어 상태
+ */
+interface OriginalMediaState {
+  stream: MediaStream | null;
+  isAudioEnabled: boolean;
+  isVideoEnabled: boolean;
+  isSharingScreen: boolean;
+  selectedAudioDeviceId: string;
+  selectedVideoDeviceId: string;
+}
+
 interface MediaDeviceState {
   localStream: MediaStream | null;
   audioInputs: DeviceInfo[];
@@ -32,6 +44,10 @@ interface MediaDeviceState {
   streamStateManager: StreamStateManager;
   includeCameraInScreenShare: boolean;
   screenShareResources: ScreenShareResources | null;
+  
+  // 파일 스트리밍 관련 상태
+  isFileStreaming: boolean;
+  originalMediaState: OriginalMediaState | null;
 }
 
 interface MediaDeviceActions {
@@ -46,6 +62,11 @@ interface MediaDeviceActions {
   stopScreenShare: () => Promise<void>;
   setIncludeCameraInScreenShare: (include: boolean) => void;
   cleanup: () => void;
+  
+  // 파일 스트리밍 관련 액션
+  saveOriginalMediaState: () => void;
+  restoreOriginalMediaState: () => Promise<boolean>;
+  setFileStreaming: (isStreaming: boolean) => void;
 }
 
 export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>((set, get) => ({
@@ -65,6 +86,10 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
   streamStateManager: new StreamStateManager(),
   includeCameraInScreenShare: true,
   screenShareResources: null,
+  
+  // 파일 스트리밍 초기 상태
+  isFileStreaming: false,
+  originalMediaState: null,
 
   initialize: async () => {
     console.log('[MediaDeviceStore] Initializing...');
@@ -314,6 +339,119 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
 
   setIncludeCameraInScreenShare: (include) => set({ includeCameraInScreenShare: include }),
 
+  /**
+   * 파일 스트리밍 시작 전 원본 미디어 상태 저장
+   * 카메라와 마이크의 현재 상태를 스냅샷으로 저장합니다.
+   */
+  saveOriginalMediaState: () => {
+    const state = get();
+    
+    console.log('[MediaDeviceStore] Saving original media state...');
+    
+    const originalState: OriginalMediaState = {
+      stream: state.localStream,
+      isAudioEnabled: state.isAudioEnabled,
+      isVideoEnabled: state.isVideoEnabled,
+      isSharingScreen: state.isSharingScreen,
+      selectedAudioDeviceId: state.selectedAudioDeviceId,
+      selectedVideoDeviceId: state.selectedVideoDeviceId
+    };
+    
+    set({ originalMediaState: originalState });
+    
+    console.log('[MediaDeviceStore] Original state saved:', {
+      hasStream: !!originalState.stream,
+      audioEnabled: originalState.isAudioEnabled,
+      videoEnabled: originalState.isVideoEnabled,
+      isSharing: originalState.isSharingScreen
+    });
+  },
+
+  /**
+   * 파일 스트리밍 종료 후 원본 미디어 상태 복원
+   * 저장된 카메라/마이크 상태로 되돌립니다.
+   * 
+   * @returns 복원 성공 여부
+   */
+  restoreOriginalMediaState: async () => {
+    const { originalMediaState, localStream: currentStream } = get();
+    const { webRTCManager } = usePeerConnectionStore.getState();
+    
+    if (!originalMediaState) {
+      console.warn('[MediaDeviceStore] No original state to restore');
+      return false;
+    }
+    
+    console.log('[MediaDeviceStore] Restoring original media state...');
+    
+    try {
+      // 파일 스트림 트랙 정리
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => {
+          if (track.readyState === 'live') {
+            track.stop();
+          }
+        });
+      }
+      
+      // 원본 스트림 복원
+      if (originalMediaState.stream && webRTCManager) {
+        await webRTCManager.replaceLocalStream(originalMediaState.stream);
+        
+        // 트랙 활성화 상태 복원
+        const videoTrack = originalMediaState.stream.getVideoTracks()[0];
+        const audioTrack = originalMediaState.stream.getAudioTracks()[0];
+        
+        if (videoTrack) {
+          videoTrack.enabled = originalMediaState.isVideoEnabled;
+        }
+        
+        if (audioTrack) {
+          audioTrack.enabled = originalMediaState.isAudioEnabled;
+        }
+      }
+      
+      // 상태 복원
+      set({
+        localStream: originalMediaState.stream,
+        isAudioEnabled: originalMediaState.isAudioEnabled,
+        isVideoEnabled: originalMediaState.isVideoEnabled,
+        isSharingScreen: originalMediaState.isSharingScreen,
+        selectedAudioDeviceId: originalMediaState.selectedAudioDeviceId,
+        selectedVideoDeviceId: originalMediaState.selectedVideoDeviceId,
+        originalMediaState: null
+      });
+      
+      // 시그널링 업데이트
+      useSignalingStore.getState().updateMediaState({ 
+        kind: 'audio', 
+        enabled: originalMediaState.isAudioEnabled 
+      });
+      useSignalingStore.getState().updateMediaState({ 
+        kind: 'video', 
+        enabled: originalMediaState.isVideoEnabled 
+      });
+      
+      console.log('[MediaDeviceStore] Original state restored successfully');
+      return true;
+      
+    } catch (error) {
+      console.error('[MediaDeviceStore] Failed to restore original state:', error);
+      set({ originalMediaState: null });
+      return false;
+    }
+  },
+
+  /**
+   * 파일 스트리밍 모드 설정
+   * 
+   * @param isStreaming - 파일 스트리밍 활성화 여부
+   */
+  setFileStreaming: (isStreaming: boolean) => {
+    console.log(`[MediaDeviceStore] File streaming mode: ${isStreaming ? 'ON' : 'OFF'}`);
+    set({ isFileStreaming: isStreaming });
+  },
+
   cleanup: () => {
     deviceManager.cleanup();
     get().localStream?.getTracks().forEach(track => track.stop());
@@ -331,6 +469,8 @@ export const useMediaDeviceStore = create<MediaDeviceState & MediaDeviceActions>
       originalStream: null,
       includeCameraInScreenShare: true,
       screenShareResources: null,
+      isFileStreaming: false,
+      originalMediaState: null,
     });
   }
 }));
